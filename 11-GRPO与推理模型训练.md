@@ -1003,7 +1003,6 @@ DeepSeek 论文把这命名为 **Aha Moment**——training 进行到某一刻�
 - OpenAI o1：内部 reasoning 也有 self-reflection
 - Qwen-QwQ：开源复现，类似 aha moment
 - Kimi-K0：长 CoT 推理"
-```
 
 ### 📊 R1 推理长度统计（论文数据）
 
