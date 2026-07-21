@@ -414,7 +414,7 @@ A：**rank 大有边际收益**，但训练成本也大。LoRA 之后剪枝的�
 
 ### 🎯 一句话标答
 
-> QLoRA = **4-bit 量化 base model + LoRA**，三个关键创新：**NF4 数据类型**（4-bit Normal Float）、**Double Quantization**（量化常数也量化）、**Paged Optimizer**（CPU offload 防 OOM）——单张 24GB GPU 微调 65B 模型。
+> QLoRA = **4-bit 量化 base model + LoRA**，三个关键创新：**NF4 数据类型**（4-bit Normal Float）、**Double Quantization**（量化常数也量化）、**Paged Optimizer**（CPU offload 防 OOM）——单张 48GB GPU 微调 65B 模型（24GB 可微调 ~33B）。
 
 ### 🗣️ 30 秒口语版
 
@@ -473,7 +473,7 @@ QLoRA 让"个人 / 小团队 fine-tune 大模型"成为可能——是 2023 年�
 
 **Double Quantization** 把 scales 再量化到 8-bit：
 
-- 每参数 = 4-bit + 8-bit/64 + 32-bit/256 (二次 scale) ≈ 4.13 bit/参数
+- 每参数 = 4-bit + 8-bit/64 + 32-bit/(64×256) (二次 scale) ≈ 4.13 bit/参数
 
 **节省 ~0.4 bit/参数**——对 70B 模型，节省约 3GB 显存。看起来小，但累积起来是真金白银。
 
@@ -520,7 +520,7 @@ QLoRA 让"个人 / 小团队 fine-tune 大模型"成为可能——是 2023 年�
 
 ### 💡 QLoRA 的性能影响
 
-DEttmers 论文的实验：
+Dettmers 论文的实验：
 
 | 配置 | MMLU |
 |---|---|

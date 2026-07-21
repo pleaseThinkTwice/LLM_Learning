@@ -311,14 +311,13 @@ A：**实现中加了 epsilon**：`std + 1e-8`。
 A：k3 estimator：`KL ≈ ratio - log(ratio) - 1`，其中 ratio = π_ref/π。
 
 它比简单的 `log(π/π_ref)` 好的原因——
-- 是 KL 的**无偏估计**（unbiased）
-- **始终非负**（log-ratio 形式有时负）
-- 在小 KL 时**方差更小**
+- **两者都是 KL 的无偏估计**，但 k3 **始终非负**（单样本的 log-ratio 有时为负）
+- k3 在小 KL 时**方差更小**
 
 数学上：
 - 标准 KL: `KL(π || π_ref) = E_{a~π}[log(π/π_ref)]`
-- 但实际我们对一个采样 a 算 log(π/π_ref) 是个有偏估计（无方差控制）
-- k3：`E_{a~π}[ratio_ref/π - log(ratio_ref/π) - 1]` 是 KL 的无偏估计
+- 对单个采样 a 直接算 log(π/π_ref) 本身**无偏**，但方差大、单样本可能为负
+- k3：`E_{a~π}[ratio_ref/π - log(ratio_ref/π) - 1]` **同样无偏，但始终非负、方差更小**
 
 DeepSeek 用 k3 是为了训练稳定性。
 
