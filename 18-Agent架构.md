@@ -1350,7 +1350,7 @@ $$\boxed{\text{★这就是第 16 章 Q2 "Small-to-Big" 和第 17 章 Q5 "大结
 A：**三个机制，一个比一个深。**
 
 **① Lost in the Middle**（第 16 章 Q1）—— **U 形曲线**
-$$\text{召回率} \sim \text{U 形：}\text{开头} ✅ \to \text{中间} ❌ \to \text{结尾} ✅$$
+$$\text{召回率} \sim \text{U 形：开头（好）} \to \text{中间（差）} \to \text{结尾（好）}$$
 **塞 40K，中间那 30K 基本是"陪跑"的。**
 
 **② ⭐ Attention 稀释**（更本质）
