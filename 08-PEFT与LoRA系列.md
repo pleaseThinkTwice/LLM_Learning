@@ -1,23 +1,26 @@
 # 第 8 章｜PEFT 与 LoRA 系列
 
-> **本章定位**：LoRA 是 LLM 微调的"事实标准"，**完整推导是必考题**。QLoRA 的 NF4 + Double Quantization + Paged Optimizer 是字节、DeepSeek 等岗位的细节题。本章重点：LoRA 数学推导 + 超参选择 + QLoRA 工程。
+> **本章定位**：LoRA 是最常用的参数高效微调方法。本章除了推导和工程细节（rank、α、初始化、QLoRA 的 NF4 与双重量化、合并与多 adapter 服务），重点回答一个研究问题：**LoRA 和全参微调真的等价吗？** 近两年的研究给出了相当一致的答案：在 SFT 的小数据场景和 RL 场景下，正确配置的 LoRA 可以接近全参微调；但在大量新知识的学习（如代码、数学的继续预训练）中，LoRA 明显"学得更少、也忘得更少"。
 
-> **配套章节**：SFT → 第 7 章 / 量化 → 第 5 部分推理优化
+> **配套章节**：SFT → 第 7 章 / 继续预训练 → 第 6 章 / 量化 → 第 13 章 / 多 LoRA 推理服务 → 第 15 章
+
+> **标记约定**：📄 论文结论 / 🧮 可推导 / 💭 直觉或有争议 / ❓ 开放问题
 
 ---
 
 ## 📌 本章导航
 
-| 序号 | 题目 | 难度 | 频率（字节/阿里/Meta/DeepSeek） | 类型 |
-|---|---|---|---|---|
-| Q1 | 为什么需要 PEFT？全参微调的代价 | ⭐⭐⭐ | 4 / 3 / 2 / 2 | 概念 |
-| Q2 | PEFT 方法谱：Adapter/Prefix/Prompt/LoRA | ⭐⭐⭐⭐ | 5 / 3 / 3 / 3 | 对比 |
-| Q3 | **LoRA 完整原理与推导** | ⭐⭐⭐⭐⭐ | **10 / 6 / 5 / 6** | 必问 |
-| Q4 | **LoRA 的 rank r 和 alpha 怎么选** | ⭐⭐⭐⭐⭐ | **7 / 4 / 4 / 5** | 工程 |
-| Q5 | **QLoRA 完整解析** | ⭐⭐⭐⭐⭐ | **8 / 5 / 4 / 6** | 深度 |
-| Q6 | DoRA / AdaLoRA / VeRA 等改进 | ⭐⭐⭐ | 3 / 2 / 2 / 2 | 前沿 |
-| Q7 | LoRA 的合并部署与多 adapter | ⭐⭐⭐ | 4 / 2 / 2 / 3 | 工程 |
-| Q8 | LoRA 在 MoE 上的特殊问题 | ⭐⭐⭐ | 3 / 1 / 2 / 4 | 高级 |
+| 序号 | 题目 | 难度 | 类型 |
+|---|---|---|---|
+| Q1 | 为什么需要 PEFT？全参微调的代价 | ⭐⭐⭐ | 概念 |
+| Q2 | PEFT 方法谱：Adapter / Prefix / Prompt / LoRA | ⭐⭐⭐⭐ | 对比 |
+| Q3 | **LoRA 原理、初始化与推导** | ⭐⭐⭐⭐⭐ | 必问 |
+| Q4 | **rank、α、学习率怎么选** | ⭐⭐⭐⭐⭐ | 工程 |
+| Q5 | **QLoRA：NF4、双重量化、分页优化器** | ⭐⭐⭐⭐⭐ | 深度 |
+| Q6 | LoRA 变体：AdaLoRA、DoRA、VeRA、LoRA+、PiSSA、GaLore | ⭐⭐⭐⭐ | 前沿 |
+| Q7 | 合并、多 adapter 服务与模型融合 | ⭐⭐⭐ | 工程 |
+| Q8 | MoE 模型的参数高效微调 | ⭐⭐⭐⭐ | 高级 |
+| Q9 | **研究问题：LoRA 与全参微调等价吗？** | ⭐⭐⭐⭐⭐ | 研究视角 |
 
 ---
 
@@ -25,76 +28,21 @@
 
 ### 🎯 一句话标答
 
-> 全参微调要更新所有参数，**显存爆炸 + 存储多份模型 + 训练慢**——对 70B 模型代价巨大。PEFT 只调少量参数（通常 < 1%），**显存省、训得快、能跨任务共享 base model**。
+> 全参微调需要为所有参数保存梯度和优化器状态（混合精度 Adam 下每参数约 16 字节，第 5 章），并且每个任务都要保存一份完整模型。PEFT 冻结原模型，只训练很少的参数，**显存和存储成本大幅下降**，同一个 base 模型可以搭配多个 adapter。代价是在需要学习大量新信息的任务上，**能力可能不如全参微调**（Q9）。
 
-### 🗣️ 30 秒口语版
+### 🧮 资源对比（7B 模型）
 
-"全参微调（Full Fine-Tuning）的代价主要在三个维度——
-
-**1. 显存爆炸**：训 7B 模型需要至少 80GB（Adam 优化器），70B 需要约 800GB——单卡放不下，需要复杂的并行。
-
-**2. 存储成本**：每个微调任务都要存一份**完整模型副本**——70B 模型 140GB（BF16），10 个任务 = 1.4TB。
-
-**3. 训练成本**：全参更新慢，每步反向都要计算所有参数梯度。
-
-**PEFT（Parameter-Efficient Fine-Tuning）**的核心思想——**冻结大部分参数，只训练少量新增参数**。优势——
-
-- **显存省**：只需要训练那部分参数的梯度和优化器状态。LoRA 训 7B 模型可能只要 16GB
-- **存储省**：每个任务只存几 MB 的 LoRA 权重，base model 共享
-- **训得快**：可学习参数少，反向传播快
-- **多任务复用**：同一个 base + 多个 LoRA = 任务切换只需要换 adapter
-
-**代价**：表达力上限略低于全参微调。但在大多数场景下差距很小（< 1%），所以工业上 PEFT 是主流。"
-
-### 🔍 全参 vs PEFT 资源对比
-
-以训 7B 模型为例：
-
-| 维度 | 全参微调 | LoRA |
+| | 全参微调（bf16 + Adam） | LoRA（r=16，所有线性层） |
 |---|---|---|
-| 可训练参数 | 7B (100%) | ~10M (0.1%) |
-| 显存（BF16+Adam） | ~112 GB | ~16 GB |
-| 单卡可训（80GB H100） | 不够 | 富余 |
-| 训练速度 | 1.0× | 1.5-2× |
-| 存储 per task | 14 GB | 30 MB |
-| 性能（vs 全参） | 100% | 95-99% |
+| 可训练参数 | 约 7B | 约 4000 万（约 0.6%） |
+| 模型状态显存 | 约 112 GB（16 字节/参数） | 约 14 GB（冻结的 bf16 权重）+ 很小的 LoRA 状态 |
+| 每个任务的存储 | 约 14 GB | 约 80 MB |
 
-### 🔥 高频追问 Top 3
+🧮 LoRA 参数量估算：LLaMA-2 7B 每层有 4 个 $4096\times4096$ 的注意力投影和 3 个 $4096\times11008$ 的 MLP 矩阵。$r=16$ 时，每个矩阵增加 $r(d_{in}+d_{out})$ 个参数：注意力部分 $4\times16\times8192$，MLP 部分 $3\times16\times15104$，每层约 117 万，32 层共约 3700 万。
 
-**Q：什么场景下应该用全参，什么场景用 PEFT？**
+💭 激活显存不会因为 LoRA 而减少（前向反向仍然要经过整个模型），所以长序列训练仍需要 gradient checkpointing 等手段。
 
-A：**经验法则**——
-- **新领域 / 新语言**（base model 完全没见过）：全参微调，需要大幅调整表示
-- **新任务 / 新格式**（base model 见过相关数据）：PEFT 即可
-- **资源充足，追求极致**：全参微调
-- **资源有限 / 快速迭代 / 多任务**：PEFT
-
-实际工业：开源开发者几乎都用 PEFT（LoRA），大公司预算大才做全参。
-
-**Q：PEFT 的性能差距能补回来吗？**
-
-A：**大部分场景差距 < 1%**，可以忽略。如果差距明显——
-- 增加 LoRA rank
-- 在更多层上加 LoRA（不只 attention，也 FFN）
-- 试 DoRA / AdaLoRA 等改进
-- 数据量充足时，差距会进一步缩小
-
-对极致质量场景（如 SOTA benchmark），全参 + 高质量数据仍是首选。
-
-**Q：PEFT 之外还有什么省显存的方法？**
-
-A：
-- **量化训练**：QLoRA 把 base model 量化到 4-bit
-- **Gradient Checkpointing**：用计算换显存
-- **ZeRO / FSDP**：分布式显存优化
-- **CPU Offload**：把 optimizer states 卸到 CPU
-
-这些方法可以**组合使用**——QLoRA + Gradient Checkpointing 能让单张 24GB 消费级 GPU 训 7B 模型。
-
-### ⚠️ 常见陷阱
-
-- 不要说"PEFT 一定比全参好"——本质是 trade-off
-- 要懂存储成本——多任务场景下 PEFT 优势巨大
+> ❌ 旧版写"LoRA 训练速度 1.5–2 倍""性能是全参的 95–99%""差距通常小于 1%"，都没有出处。📄 LoRA 原论文报告的是在 GPT-3 175B 上训练吞吐提升约 25%；性能差距取决于任务（Q9）。
 
 ---
 
@@ -102,734 +50,381 @@ A：
 
 ### 🎯 一句话标答
 
-> 四类 PEFT：**Adapter** 在层间插入小网络、**Prefix Tuning** 在每层 attention 前加可学习的"前缀向量"、**Prompt Tuning** 只在输入端加可学习 prompt、**LoRA** 在权重矩阵旁加低秩分解——**LoRA 综合最优**，是事实标准。
+> **Adapter** 在层内插入小的瓶颈网络；**Prefix tuning** 在每层注意力的 K、V 前拼接可学习向量；**Prompt tuning** 只在输入 embedding 前加可学习的软提示；**LoRA** 给权重矩阵加一个低秩增量 $BA$。LoRA 训练后可以**合并回原权重**，推理零额外开销，因此最常用。
 
-### 🗣️ 30 秒口语版
+### 🔍 对比
 
-"PEFT 方法可以按**插入位置**分四类——
+| 方法 | 改动位置 | 推理开销 | 出处 |
+|---|---|---|---|
+| Adapter | 子层后插入降维–非线性–升维模块 | 增加串行计算 | 📄 Houlsby et al. 2019 |
+| Prefix tuning | 每层的 K、V 前拼接可学习的前缀 | 占用上下文长度 | 📄 Li & Liang 2021 |
+| Prompt tuning | 输入层的软提示 | 占用少量上下文 | 📄 Lester et al. 2021 |
+| P-Tuning v2 | 每层都加可学习前缀（深层提示） | 占用上下文长度 | 📄 Liu et al. 2022 |
+| LoRA | 权重矩阵加低秩增量 | 合并后为零 | 📄 Hu et al. 2021 |
+| (IA)³ | 用可学习向量逐元素缩放 K、V 和 FFN 激活 | 可合并 | 📄 Liu et al. 2022（T-Few） |
 
-**1. Adapter（2019, Houlsby）**：在 Transformer 每层后插入一个小 bottleneck 网络（降维-激活-升维）。**优点**：模块化清晰。**缺点**：**推理时增加了串行步骤**——延迟变高。
+### 🔥 高频追问
 
-**2. Prefix Tuning（2021）**：在每层的 attention 前加一组**可学习的 KV 向量**（prefix），让 attention 同时关注这些 prefix。**优点**：不动原权重。**缺点**：占用序列长度，可学习参数少时效果差。
+**Q：LoRA 比 Adapter 好在哪？**
 
-**3. Prompt Tuning（2021）**：极端简化版——只在**输入 embedding 端**加可学习的 prompt token。**优点**：实现极简。**缺点**：效果显著差于其他方法，特别是小模型。
+A：📄 LoRA 论文测量了 Adapter 在**小 batch、短序列**推理时会带来明显的延迟增加（因为 Adapter 是额外的串行层，GPU 无法通过并行来摊销）；而 LoRA 合并后与原模型结构完全相同。此外，LoRA 不改变网络结构，实现和部署都更简单。
 
-**4. LoRA（2021）**：在每个**权重矩阵** W 旁加 **W + BA** 的低秩分解。**优点**：表达力强、训练完可合并、零推理开销。**缺点**：相对其他方法可学习参数稍多（但仍然 < 1%）。
+**Q：Prompt tuning 还有用吗？**
 
-**当前格局**：**LoRA 一统天下**，其他几种主要在学术研究中提及。"
+A：📄 Lester et al. 2021 发现，随着模型规模增长（在 T5 上到约 10B 参数），prompt tuning 与全参微调的差距逐渐消失；小模型上差距明显。📄 P-Tuning v2 通过在每一层都加入可学习前缀，在不同规模上都能接近全参微调。实践中 LoRA 更通用，prompt 类方法较少使用。
 
-### 🔍 四种 PEFT 对比
-
-| 方法 | 插入位置 | 推理延迟 | 表达力 | 可学习参数 | 当前地位 |
-|---|---|---|---|---|---|
-| Adapter | 层间 bottleneck | 增加 5-10% | 中 | 0.5-2% | 历史方案 |
-| Prefix Tuning | Attention prefix | 增加（序列变长） | 弱 | 0.1-0.5% | 已淘汰 |
-| Prompt Tuning | Input embedding | 几乎无 | 弱（小模型差） | 0.01-0.1% | 已淘汰 |
-| **LoRA** | 权重矩阵旁 | **零（可合并）** | **强** | **0.1-1%** | **主流** |
-
-### 🔥 高频追问 Top 3
-
-**Q：为什么 LoRA 胜过 Adapter？**
-
-A：三点——
-- **零推理延迟**：LoRA 训练完可以把 BA 加到 W 上，推理时不增加任何计算。Adapter 必须保留 bottleneck 结构，每层多一次小矩阵乘
-- **表达力更强**：LoRA 的低秩分解可以更灵活，rank 调整空间大
-- **实现简洁**：LoRA 加在权重旁，不破坏原结构；Adapter 改变了网络拓扑
-
-**Q：Prompt Tuning 完全没用了吗？**
-
-A：在**大模型**（>10B）上，Prompt Tuning 可以接近 full fine-tuning——但**小模型**上效果显著差。所以现在用得少。
-
-一个例外是**多任务场景**——为每个任务训一个 soft prompt，base model 完全共享，理论上比 LoRA 还省空间（每任务只几个 KB）。但实际效果不如 LoRA，所以也未推广。
-
-**Q：能不能把多种 PEFT 组合？**
-
-A：**可以但收益小**。比如 LoRA + Prefix Tuning，理论上能 cover 更广，但实践中 LoRA 单独就够，组合反而增加超参复杂度。
-
-唯一常见组合是 **LoRA + 不同层不同 rank**（如 AdaLoRA，下面会讲）。
-
-### ⚠️ 常见陷阱
-
-- 不要把所有 PEFT 混为一谈——四类机制不同
-- LoRA 是事实标准，但要懂为什么胜出（零延迟 + 表达力）
+### 📚 出处
+- Houlsby et al. *Parameter-Efficient Transfer Learning for NLP*. ICML 2019. arXiv:1902.00751
+- Li & Liang. *Prefix-Tuning*. ACL 2021. arXiv:2101.00190
+- Lester et al. *The Power of Scale for Parameter-Efficient Prompt Tuning*. EMNLP 2021. arXiv:2104.08691
+- Liu et al. *P-Tuning v2*. ACL 2022. arXiv:2110.07602
+- Liu et al. *Few-Shot Parameter-Efficient Fine-Tuning is Better and Cheaper than In-Context Learning*（(IA)³）. NeurIPS 2022. arXiv:2205.05638
 
 ---
 
-## Q3：LoRA 完整原理与推导 ⭐⭐⭐⭐⭐（必问）
+## Q3：LoRA 原理、初始化与推导 ⭐⭐⭐⭐⭐
 
 ### 🎯 一句话标答
 
-> LoRA 假设**权重更新 ΔW 是低秩的**——把原本要训的 ΔW（d×d）分解成两个小矩阵 B（d×r）和 A（r×d）的乘积。**只训 BA、冻结 W**，参数量从 d² 降到 2dr，r << d。
+> 📄 LoRA 冻结预训练权重 $W_0\in\mathbb{R}^{d_{out}\times d_{in}}$，把更新参数化为 $\Delta W = BA$，$B\in\mathbb{R}^{d_{out}\times r}$，$A\in\mathbb{R}^{r\times d_{in}}$，$r\ll\min(d_{in},d_{out})$。前向为 $h = W_0x + \frac{\alpha}{r}BAx$。**$A$ 随机初始化、$B$ 初始化为 0**，因此训练开始时 $\Delta W=0$，模型与原模型完全相同。
 
-### 🗣️ 30 秒口语版
+### 🧮 推导与细节
 
-"LoRA 的完整故事可以分三段——
+**前向**：
+$$h = W_0x + \frac{\alpha}{r}BAx$$
 
-**1. 关键 insight**：微调时 ΔW 的本征秩很低
+**参数量**：每个矩阵从 $d_{out}d_{in}$ 降到 $r(d_{in}+d_{out})$。$d_{in}=d_{out}=4096$、$r=8$ 时，从约 1678 万降到 65536，约为 0.39%。
 
-LoRA 的作者 Hu et al. 观察到——**预训练已经塞进了大部分知识，微调时权重变化 ΔW 是低秩的**。这个假设来自对真实微调任务的实证分析——把 ΔW 做 SVD，发现前几个奇异值占了大部分能量。
+**梯度**：令 $g = \partial\mathcal{L}/\partial h$（对单个样本），则
+$$\frac{\partial\mathcal{L}}{\partial B} = \frac{\alpha}{r}\,g\,(Ax)^T,\qquad \frac{\partial\mathcal{L}}{\partial A} = \frac{\alpha}{r}\,B^Tg\,x^T$$
+🧮 由于 $B=0$，第一步时 $\partial\mathcal{L}/\partial A = 0$，只有 $B$ 会被更新；之后两者才一起变化。
 
-**2. 数学形式**
+**合并**：训练后 $W' = W_0 + \frac{\alpha}{r}BA$，推理与原模型结构完全一致。
 
-原始权重矩阵 W ∈ R^(d×d)（attention 的 Q/K/V/O 投影、FFN 的矩阵都符合）。
+### 📄 原论文的关键实验与分析
 
-LoRA 不直接训 ΔW，而是分解成两个小矩阵：
+- **加在哪些矩阵上**：📄 在 GPT-3 175B、固定可训练参数预算的实验中，同时调整 $W_q$ 和 $W_v$（每个 $r=4$）或同时调整 $W_q, W_k, W_v, W_o$（每个 $r=2$），比只调整单个矩阵（$r=8$）效果更好。结论是"用较小的 rank 覆盖更多矩阵"比"在少数矩阵上用大 rank"更好。
+- **秩真的很低吗**：📄 他们比较了 $r=8$ 和 $r=64$ 学到的子空间，发现最重要的几个方向高度重合，说明 $\Delta W$ 的"有效秩"很低。
+- **$\Delta W$ 学到了什么**：📄 分析发现 $\Delta W$ 与 $W_0$ 有一定相关性，但它**放大的是 $W_0$ 中没有被强调的方向**，放大倍数很大（$r=4$ 时约为 20 倍左右）。作者据此推测，LoRA 放大了预训练中已学到、但不突出的任务相关特征。
+- 📄 理论背景：Aghajanyan et al. 2021（*Intrinsic Dimensionality Explains the Effectiveness of Language Model Fine-Tuning*）发现，预训练模型微调时只需要在一个很低维的随机子空间中优化就能达到接近全参微调的效果，并且模型越大、预训练越充分，所需的"内在维度"越低。
 
-`ΔW = B · A`，其中 B ∈ R^(d×r)，A ∈ R^(r×d)，r << d
+> ❌ 旧版写"对 ΔW 做 SVD，前 r 个奇异值解释 >80% 的方差""LLaMA 系实践通常加 QKVO、不加 FFN"，没有出处。📄 QLoRA 论文的结论恰恰是：**要达到全参微调的效果，需要把 LoRA 加到所有线性层上**（包括 MLP）。
 
-前向变成：
-
-`y = W·x + ΔW·x = W·x + B·A·x`
-
-可学习参数从 d² 降到 2dr。如果 d=4096, r=8，参数量从 16.8M 降到 65K——**减少 250×**。
-
-**3. 关键细节**：
-
-- **初始化**：A 用高斯初始化，B 用零初始化——保证训练开始时 BA = 0，等于原模型
-- **缩放系数 α**：实际形式是 `y = Wx + (α/r)·BAx`，α 控制 LoRA 的影响强度
-- **应用层**：通常加在 Attention 的 Q、V 投影（实测效果最好），有时也加 K、O 和 FFN
-
-训练完后，可以**合并**：W' = W + (α/r)BA，得到一个**和原模型完全等价的新模型**，推理时无额外开销。"
-
-### 📐 完整数学推导
-
-**原始 Transformer 层中的某个线性变换**：
-$$h = Wx, \quad W \in \mathbb{R}^{d \times d}$$
-
-**LoRA 假设**：微调时的 ΔW 可以用低秩矩阵近似：
-$$\Delta W \approx BA, \quad B \in \mathbb{R}^{d \times r}, A \in \mathbb{R}^{r \times d}, r \ll d$$
-
-**前向公式**：
-$$h = Wx + \Delta Wx = Wx + BAx$$
-
-**带缩放系数 α 的标准形式**：
-$$h = Wx + \frac{\alpha}{r} BAx$$
-
-α 是个超参（通常 16 或 32），r 是 rank（通常 8 或 16）。**α/r 用来调节 LoRA 模块的强度，让训练对 r 的选择不那么敏感**。
-
-**参数量对比**（设 d=4096）：
-
-| 配置 | 参数量 | 与原 W 比例 |
-|---|---|---|
-| 完整 W（d×d） | 16,777,216 | 100% |
-| LoRA r=8 (2dr) | 65,536 | 0.39% |
-| LoRA r=16 | 131,072 | 0.78% |
-| LoRA r=64 | 524,288 | 3.13% |
-
-**关键初始化**：
-- $A \sim \mathcal{N}(0, \sigma^2)$ 高斯初始化
-- $B = 0$ 全零初始化
-
-→ 初始时 BA = 0，模型行为和原 base model 完全一致。这样**训练初期不会破坏 base model**，慢慢学习 ΔW。
-
-### 💻 简洁实现
+### 💻 实现
 
 ```python
-import torch.nn as nn
 import math
+import torch
+import torch.nn as nn
 
 class LoRALinear(nn.Module):
-    def __init__(self, base_layer: nn.Linear, r: int, alpha: int):
+    def __init__(self, base: nn.Linear, r: int = 16, alpha: int = 32, dropout: float = 0.0):
         super().__init__()
-        self.base_layer = base_layer  # 冻结的原层
-        self.r = r
+        self.base = base
+        for p in self.base.parameters():
+            p.requires_grad_(False)
         self.scale = alpha / r
-        
-        in_dim = base_layer.in_features
-        out_dim = base_layer.out_features
-        
-        # 低秩矩阵
-        self.A = nn.Parameter(torch.randn(r, in_dim) * 0.01)
-        self.B = nn.Parameter(torch.zeros(out_dim, r))
-        
-        # 冻结原参数
-        for p in self.base_layer.parameters():
-            p.requires_grad = False
-    
+        self.A = nn.Parameter(torch.empty(r, base.in_features))
+        self.B = nn.Parameter(torch.zeros(base.out_features, r))
+        nn.init.kaiming_uniform_(self.A, a=math.sqrt(5))   # 与 HF PEFT 默认一致
+        self.drop = nn.Dropout(dropout)
+
     def forward(self, x):
-        base_out = self.base_layer(x)
-        lora_out = (x @ self.A.T) @ self.B.T
-        return base_out + self.scale * lora_out
-    
+        return self.base(x) + self.scale * (self.drop(x) @ self.A.T @ self.B.T)
+
+    @torch.no_grad()
     def merge(self):
-        """训练完后合并到原权重"""
-        with torch.no_grad():
-            self.base_layer.weight += self.scale * (self.B @ self.A)
+        self.base.weight += (self.scale * self.B @ self.A).to(self.base.weight.dtype)
 ```
 
-### 🔍 LoRA 应用层选择（论文实验结果）
+### 🔥 高频追问
 
-| 应用层 | r=4 性能 | 参数量 |
-|---|---|---|
-| 只加 Q | 中 | 最少 |
-| 只加 V | 中（略优于 Q） | 最少 |
-| **Q + V** | **最佳** | 2× |
-| Q + K + V + O | 略优于 QV | 4× |
-| 包含 FFN | 微弱提升 | 大幅增加 |
+**Q：为什么是 $B=0$、$A$ 随机，而不是反过来？**
 
-**经验法则**：先加 Q+V，效果不够再扩展到 K+O 和 FFN。LLaMA 系的实践通常加 Q+K+V+O（不加 FFN）。
+A：两种方式都能保证初始 $\Delta W=0$。📄 Hayou et al. 2024（*The Impact of Initialization on LoRA Finetuning Dynamics*）从理论和实验上比较了两者：**$B=0$、$A$ 随机**的初始化允许使用更大的学习率而不发生不稳定，从而学习得更高效；$A=0$ 的初始化在相同学习率下更新幅度不足。这为默认做法提供了理论依据。
 
-### 🔥 高频追问 Top 3
+**Q：两个都随机初始化不行吗？**
 
-**Q：为什么 ΔW 是低秩的？有理论解释吗？**
+A：🧮 那样初始时 $\Delta W = BA \neq 0$，模型一开始就偏离了预训练模型，相当于注入了随机噪声。
 
-A：这是个**经验性假设**，但有几个支持论据——
-
-- **预训练理论**：预训练让权重位于"语义流形"上，微调只是在这个流形上小幅移动，自由度低
-- **实证 SVD 分析**：对真实任务的 ΔW 做 SVD，前 r 个奇异值通常解释 > 80% 的方差
-- **任务特异性**：单个任务需要的能力子空间是有限的，不需要全维度调整
-
-但**有反例**——多任务、新领域的 ΔW 可能不低秩，这时 LoRA 效果会下降，需要全参或者更大 rank。
-
-**Q：为什么 B 要全零初始化，A 不行吗？**
-
-A：核心要求是 **BA = 0 在训练开始时**。两种方式都行——
-- A=0, B=随机
-- A=随机, B=0
-
-但**B=0 更常用**，因为：
-- B 是"上行投影"，决定输出方向。零初始化让模型从中性状态开始学
-- A=0 也能 work，但有些场景下 A 的方向需要继承，零初始化打破这种继承
-- 大部分实现都用 B=0，是约定俗成
-
-不能两者都随机——那样 BA ≠ 0，训练初期就破坏了 base model。
-
-**Q：LoRA 的 r 怎么选？8 / 16 / 64 各代表什么？**
-
-A：详见 Q4。简短版——
-- **r=4-8**：极轻量，适合简单任务
-- **r=16-32**：常见，适合 SFT
-- **r=64-128**：接近全参微调的能力，适合复杂任务
-- **r >= 128**：边际收益递减，不如直接全参
-
-### ⚠️ 常见陷阱
-
-1. **要现场推导 LoRA 公式**：高频白板题
-2. **初始化方向不能搞反**：B=0, A=随机
-3. **要懂 α 的作用**：α/r 是缩放，不是简单系数
-
-### 🏢 大厂偏好
-
-- **字节 / DeepSeek**：必问，要求白板推导
-- **应用算法岗**：会问"你的项目里用了多大 r？为什么？"
-
-### 📚 延伸阅读
-- [LoRA: Low-Rank Adaptation of Large Language Models](https://arxiv.org/abs/2106.09685) - 原论文
+### 📚 出处
+- Hu et al. *LoRA: Low-Rank Adaptation of Large Language Models*. ICLR 2022. arXiv:2106.09685
+- Aghajanyan et al. ACL 2021. arXiv:2012.13255
+- Hayou et al. *The Impact of Initialization on LoRA Finetuning Dynamics*. NeurIPS 2024. arXiv:2406.08447
 
 ---
 
-## Q4：LoRA 的 rank r 和 alpha 怎么选 ⭐⭐⭐⭐⭐（工程）
+## Q4：rank、α、学习率怎么选 ⭐⭐⭐⭐⭐
 
 ### 🎯 一句话标答
 
-> r 控制**表达力上限**，α 控制 **LoRA 影响强度**。经验法则：**r=16, α=32**（α=2r）是好默认；任务简单可降到 r=8，任务复杂或全参替代可升到 r=64+。
+> $r$ 决定增量的容量，$\alpha/r$ 决定增量的缩放。常见起点：$r=16$、$\alpha=16$ 或 $32$，**LoRA 加到所有线性层**。📄 LoRA 的最优学习率通常比全参微调**高约一个数量级**。$\alpha/r$ 的缩放使最优学习率对 $r$ 不太敏感；📄 rsLoRA 指出，在 rank 很大时应改用 $\alpha/\sqrt r$ 的缩放。
 
-### 🗣️ 30 秒口语版
+### 🧮 为什么要除以 $r$？
 
-"这是个工程经验题，能答好体现你真的调过 LoRA。
+📄 LoRA 论文的说法是：用 $\alpha/r$ 缩放后，改变 $r$ 时不需要重新调学习率（在 Adam 下，$\alpha$ 的作用近似于调整学习率）。
 
-**r（rank）的选择**：
+📄 **rsLoRA**（Kalajdzievski 2023, *A Rank Stabilization Scaling Factor for Fine-Tuning with LoRA*）：从初始化时前向和反向信号的尺度出发，证明当 $r$ 增大时，$\alpha/r$ 会使 LoRA 的更新随 $r$ 增大而**过小**，导致大 rank 时学习变慢、提升有限；应使用 $\alpha/\sqrt r$，此时增大 rank 能带来持续的性能提升。HF PEFT 中可通过 `use_rslora=True` 开启。
 
-直觉——r 越大，LoRA 的表达力越强，但参数和显存也越大。
+### 📄 学习率
 
-- **r=4-8**：极轻量，适合**风格调整、简单任务**（如让模型说话风格变）
-- **r=16-32**：**事实标准**，覆盖大多数 SFT 场景
-- **r=64-128**：接近全参微调能力，适合**复杂领域适配**
-- **r=256+**：边际收益递减，不如直接全参微调
+- 📄 Biderman et al. 2024 的扫描显示，LoRA 的最优学习率比全参微调高约一个数量级。
+- 📄 Thinking Machines（Schulman 等, 2025 博客 *LoRA Without Regret*）在 SFT 和 RL 上做了大规模扫描，得出的经验结论包括：LoRA 的最优学习率约为全参微调的 10 倍；由于 $1/r$ 缩放，最优学习率**几乎不依赖于 rank**；LoRA 对大 batch 的容忍度不如全参微调。
+- 📄 **LoRA+**（Hayou et al., ICML 2024）：从宽度无穷大极限的分析出发，指出 $A$ 和 $B$ 应使用不同的学习率，建议 $\eta_B = \lambda\eta_A$，$\lambda$ 取 16 左右，能提升效果和收敛速度。
 
-**α（alpha）的选择**：
+### 🔍 经验起点
 
-α 在公式 `α/r · BAx` 中作为缩放系数。经验——
-
-- **α = 2r**（如 r=16 时 α=32）：**最常用**，让有效缩放系数 = 2
-- **α = r**：缩放系数 = 1，LoRA 影响适中
-- **α << r**：LoRA 影响弱，几乎不起作用
-- **α >> r**：LoRA 影响强，可能过度
-
-**为什么要 α/r 缩放**？这样**改变 r 时不用重新调 lr**——比如 r 从 8 变到 16，α 保持 32，则缩放从 4 变到 2，模型行为变化可控。
-
-**实战配方**：
-- 默认起点：**r=16, α=32**
-- 效果不够：升 r 到 32 或 64
-- 显存紧张：降 r 到 8
-- 学习率：1e-4 到 5e-4（比全参微调大！）"
-
-### 🔍 r 和 α 的实战参考
-
-| 场景 | r | α | lr |
-|---|---|---|---|
-| 风格调整 / 简单 SFT | 4-8 | 16 | 5e-4 |
-| **标准 SFT** | **16** | **32** | **3e-4** |
-| 复杂领域适配 | 32-64 | 64 | 2e-4 |
-| 接近全参替代 | 128+ | 256 | 1e-4 |
-
-### 💡 为什么 LoRA 的 lr 比全参微调大？
-
-这是个常被忽略的细节——
-
-全参微调 lr 一般 1e-5 到 5e-5；LoRA 推荐 1e-4 到 5e-4，**大一个数量级**。
-
-**原因**：LoRA 训练的是 BA，是从零开始的低秩矩阵——没有"已经训好的权重需要保护"的问题。可以用大 lr 加速收敛。全参微调要保护已有权重，必须小 lr。
-
-**实际经验**：
-- LoRA: 3e-4（≈ 全参 3e-5 × 10）
-- 全参: 3e-5
-
-### 🔥 高频追问 Top 3
-
-**Q：α 是不是越大越好？**
-
-A：**不是**。α 太大有两个问题——
-- LoRA 输出占主导，base model 信号被压制
-- 训练不稳定，loss 可能 spike
-
-经验上 **α/r ≤ 2-4** 是合理范围。
-
-**Q：能不能不同层用不同 r？**
-
-A：可以——这就是 **AdaLoRA** 的思路（下面会讲）。AdaLoRA 让模型自适应决定每层的 r：重要层 r 大，不重要层 r 小。理论上更优，但工程上复杂。
-
-实践中**所有层用同一 r 已经够好**，不一定要 AdaLoRA。
-
-**Q：rank 是不是越大越好？训出来再剪枝呢？**
-
-A：**rank 大有边际收益**，但训练成本也大。LoRA 之后剪枝的工作有，但收益小——LoRA 本来就是低秩，进一步剪反而损失能力。
-
-**经验**：直接选合适的 r，不要"训大再剪"。
-
-### ⚠️ 常见陷阱
-
-1. **α 和 r 的关系要记住**：α = 2r 是常用配置
-2. **LoRA 用大 lr**：比全参微调大 10×
-3. **不要无脑加大 r**：边际收益递减
-
-### 🏢 大厂偏好
-
-- **应用算法岗**：必问，要求基于具体场景给配置
-- **字节 / 阿里**：可能问"r=128 和全参微调还有差距吗"
-
----
-
-## Q5：QLoRA 完整解析 ⭐⭐⭐⭐⭐（深度）
-
-### 🎯 一句话标答
-
-> QLoRA = **4-bit 量化 base model + LoRA**，三个关键创新：**NF4 数据类型**（4-bit Normal Float）、**Double Quantization**（量化常数也量化）、**Paged Optimizer**（CPU offload 防 OOM）——单张 48GB GPU 微调 65B 模型（24GB 可微调 ~33B）。
-
-### 🗣️ 30 秒口语版
-
-"QLoRA 是 2023 年 Dettmers 等人的工作，把 LoRA 推到了消费级 GPU 能用的程度。
-
-**核心思路**：base model 不需要训，那为什么用 BF16 加载？**用 4-bit 量化加载即可**——只在 LoRA 部分用高精度。
-
-但简单 4-bit 量化（如 INT4）有问题——精度太低，模型质量崩坏。QLoRA 做了三个关键改进——
-
-**1. NF4（4-bit Normal Float）**：
-- 普通 INT4：把 [-1, 1] 均匀分成 16 个区间
-- NF4：根据**标准正态分布**设计 16 个量化点——更密集地覆盖高频区域，**精度比 INT4 高一截**
-- 神经网络权重近似服从正态分布，所以 NF4 适配
-
-**2. Double Quantization**：
-- 量化时需要存 scale factor（每 64 个权重一个）——这些 scale 本身是 FP32
-- 对 scale **再做一次量化** → 8-bit
-- 减少 0.5 bit/参数 的额外开销
-
-**3. Paged Optimizer**：
-- 用 NVIDIA Unified Memory，**让 optimizer states 在 GPU 和 CPU 之间自动 page**
-- 显存峰值降低，OOM 时自动 swap 而不是 crash
-- 关键在于 memory spikes（如梯度累积的某个时刻）能 graceful 处理
-
-**效果**：单张 RTX 3090 (24GB) 能微调 33B 模型；4×3090 能微调 70B。**性能损失约 1-2%**，对大多数场景可接受。
-
-QLoRA 让"个人 / 小团队 fine-tune 大模型"成为可能——是 2023 年最重要的工程突破之一。"
-
-### 📐 三大创新详解
-
-#### 创新 1：NF4 量化
-
-**普通 4-bit 量化**（INT4）：
-- 把数值范围 [-1, 1] 均匀切分成 16 段
-- 量化点：-1.0, -0.875, -0.75, ..., 0.75, 0.875, 1.0
-- 适合**均匀分布**的数据
-
-**NF4 量化**：
-- 基于标准正态分布 N(0,1) 的分位点
-- 量化点在中心密集，边缘稀疏
-- 16 个量化点的实际值（论文 Table 1）：
-```
-[-1.0, -0.696, -0.525, -0.395, -0.284, -0.184, -0.091, 0.0,
- 0.080, 0.161, 0.246, 0.338, 0.441, 0.563, 0.723, 1.0]
-```
-
-**为什么 NF4 更好**？神经网络权重经过初始化和训练，**接近正态分布**——大部分权重在中心附近，少数在边缘。NF4 在中心给更多量化点，**总体量化误差更小**。
-
-**实测**：NF4 精度损失比 INT4 小约 50%。
-
-#### 创新 2：Double Quantization
-
-**问题**：4-bit 量化时，每个 block（默认 64 个权重）有一个 FP32 的 scale。这些 scales 占用：
-
-- 每参数 = 4-bit (权重) + 32-bit / 64 (scale) = 4.5 bit/参数
-
-**Double Quantization** 把 scales 再量化到 8-bit：
-
-- 每参数 = 4-bit + 8-bit/64 + 32-bit/(64×256) (二次 scale) ≈ 4.13 bit/参数
-
-**节省 ~0.4 bit/参数**——对 70B 模型，节省约 3GB 显存。看起来小，但累积起来是真金白银。
-
-#### 创新 3：Paged Optimizer
-
-**问题场景**：训练过程中存在 **memory spikes**——
-- 梯度计算的某个瞬间
-- Optimizer step 期间
-- 这些 spikes 可能超过 GPU 显存，导致 OOM
-
-**Paged Optimizer**：
-- 用 NVIDIA Unified Memory 机制
-- Optimizer states 分配在 CPU 和 GPU 共享的内存池
-- spike 时自动 page 出 GPU 到 CPU；需要时再 page 回来
-- 相比硬性 OOM，**graceful 慢一点但能跑完**
-
-类似 OS 的 swap，但是给 GPU 用。
-
-### 🔍 QLoRA 训练流程
-
-```
-1. 加载 base model：
-   - 用 NF4 量化，每参数 ~4 bit
-   - 70B 模型从 140GB (BF16) 降到约 35GB
-   - 加 Double Quantization 进一步降到 ~28GB
-
-2. 反量化进行前向：
-   - Forward 时，把 4-bit 权重反量化到 BF16
-   - 算完即弃，不持久占显存
-   - 这是 QLoRA 的"compute dequant"
-
-3. LoRA 部分用 BF16：
-   - LoRA 的 B、A 矩阵都是 BF16
-   - 梯度只对 LoRA 部分算
-
-4. 反向传播：
-   - 梯度只更新 LoRA
-   - Base model 量化权重完全不动
-
-5. Optimizer step：
-   - 只更新 LoRA 的优化器状态
-   - 如果显存紧，用 Paged Optimizer
-```
-
-### 💡 QLoRA 的性能影响
-
-Dettmers 论文的实验：
-
-| 配置 | MMLU |
+| 场景 | 建议 |
 |---|---|
-| LLaMA-65B 全参微调 | 63.9 |
-| LLaMA-65B LoRA (BF16) | 63.4 |
-| **LLaMA-65B QLoRA (NF4)** | **63.5** |
-| LLaMA-65B INT4 + LoRA | 61.8 |
+| 指令遵循、风格调整、小数据 SFT | $r=8$–$32$，所有线性层，学习率约为全参的 10 倍 |
+| 大量新知识（代码、数学、新语言） | 考虑全参微调或继续预训练；如果用 LoRA，需要更大的 rank，并接受能力上限（Q9） |
+| RL（GRPO 等） | 📄 很小的 rank 就可能足够（Q9） |
 
-**关键观察**：
-- QLoRA (NF4) 几乎不损失性能
-- NF4 比 INT4 显著好（差 1.7 个点）
-- LoRA vs 全参的差距本来就小
+> ❌ 旧版的"r=16, α=32, lr=3e-4"等表格、"α/r ≤ 2–4 是合理范围"等经验数字没有出处。上面给出的是有出处的结论；具体数值仍应在自己的任务上做扫描。
 
-### 🔥 高频追问 Top 3
-
-**Q：NF4 为什么比 INT4 好？**
-
-A：核心是**适配权重分布**。神经网络权重接近正态分布——大部分在中心，少数在边缘。
-
-- **INT4**（均匀）：每个量化点覆盖等宽区间。中心权重密集但只有 ~3 个量化点服务，边缘权重稀疏却也有 ~3 个量化点，**浪费**
-- **NF4**（正态）：中心密集（~8 个量化点）、边缘稀疏（~4 个），**资源分配匹配数据分布**
-
-类比 Huffman 编码——高频用短码、低频用长码。NF4 是同样思想的量化版。
-
-**Q：QLoRA 推理时怎么处理？**
-
-A：两种选择——
-- **保持量化**：推理时仍用 NF4，节省显存。但需要框架支持 NF4 推理（bitsandbytes 等）
-- **合并 + 反量化**：训练完后，把 LoRA 合并到 base model 中并反量化回 BF16，得到一个标准的 BF16 模型。**这是更常见的部署方式**，能用所有标准推理框架（vLLM、TGI 等）
-
-实践中第二种更主流——训练用 QLoRA 省钱，部署用 BF16 标准化。
-
-**Q：QLoRA 能做继续预训练吗？**
-
-A：**理论上可以，但不推荐**。继续预训练需要更新所有参数学习新知识，LoRA 的低秩约束太强。
-
-经验做法：
-- 继续预训练用全参（或 ZeRO）
-- SFT / 对齐用 QLoRA
-
-### ⚠️ 常见陷阱
-
-1. 不要把 NF4 和 INT4 搞混
-2. 要懂 Double Quantization 的作用——量化常数也量化
-3. Paged Optimizer 是 NVIDIA Unified Memory，不是简单的 CPU offload
-
-### 🏢 大厂偏好
-
-- **应用算法岗 / 小团队**：必问，QLoRA 是降本利器
-- **字节 / DeepSeek**：会让你详述三大创新
-
-### 📚 延伸阅读
-- [QLoRA: Efficient Finetuning of Quantized LLMs](https://arxiv.org/abs/2305.14314)
+### 📚 出处
+- Kalajdzievski. *rsLoRA*. 2023. arXiv:2312.03732
+- Hayou et al. *LoRA+*. ICML 2024. arXiv:2402.12354
+- Biderman et al. *LoRA Learns Less and Forgets Less*. TMLR 2024. arXiv:2405.09673
+- Schulman et al. *LoRA Without Regret*. Thinking Machines Lab: Connectionism, 2025（博客）
 
 ---
 
-## Q6：DoRA / AdaLoRA / VeRA 等改进 ⭐⭐⭐
+## Q5：QLoRA：NF4、双重量化、分页优化器 ⭐⭐⭐⭐⭐
 
 ### 🎯 一句话标答
 
-> LoRA 的改进主要在三个方向：**AdaLoRA** 自适应 rank 分配、**DoRA** 把权重分解成方向+幅度、**VeRA** 用极少参数（共享 BA 矩阵）——**DoRA 是 2024 最受关注的改进**。
+> 📄 QLoRA（Dettmers et al., NeurIPS 2023）把冻结的 base 模型量化为 **4-bit NormalFloat（NF4）**，在其上训练 bf16 的 LoRA，反向传播穿过量化权重（计算时反量化到 bf16）。三个关键技术：**NF4**、**双重量化**（对量化常数再量化）、**分页优化器**（利用统一内存应对显存峰值）。论文表明可以在单张 48GB GPU 上微调 65B 模型，并且 **NF4 + 双重量化能完全恢复 16-bit LoRA 的效果**。
 
-### 🗣️ 30 秒口语版
+### 🧮 NF4
 
-"LoRA 之后有一堆改进，挑几个重要的——
+**思路**：如果权重近似服从零均值正态分布，那么把正态分布的**分位点**作为量化点，可以让每个量化区间分到大致相同数量的权重。
 
-**AdaLoRA（2023）**：让每层自动决定 r 大小——重要层 r 大，不重要层 r 小。通过迭代剪枝实现。**理论上更优**，但**工程复杂**，未广泛采用。
-
-**DoRA（2024, NVIDIA）**：核心 insight——把权重分解成**方向（direction）+ 幅度（magnitude）**两部分，只对方向用 LoRA、幅度直接学。`W = m * (V + LoRA) / ||V + LoRA||`。
-
-DoRA 的论文显示**在小 rank 下显著胜过 LoRA**（比如 r=4 时 DoRA ≈ LoRA r=16）。**2024 起越来越多采用**，是 LoRA 的下一代。
-
-**VeRA（2024）**：极端节俭版——所有层的 LoRA 共享同一对 BA 矩阵，每层只学一对 scalar (b, d) 来缩放。**参数量比 LoRA 少 10×**，但效果略弱。
-
-**LoRA+ (2024)**：观察到 A 和 B 的最优 lr 不同——B 的 lr 应该大于 A（比如 16×）。简单改进就能提升。
-
-**其他**：QA-LoRA（量化感知）、LoRA-FA（冻结 A）、LongLoRA（长上下文专用）等。"
-
-### 🔍 主要改进对比
-
-| 方法 | 核心思想 | 相比 LoRA 优势 | 复杂度 |
-|---|---|---|---|
-| AdaLoRA | 自适应 rank | 每层 r 优化 | 高 |
-| **DoRA** | **方向+幅度分解** | **小 r 显著更好** | **中** |
-| VeRA | 共享 BA + scalar | 参数少 10× | 低 |
-| LoRA+ | A、B 不同 lr | 简单提升 | 极低 |
-| LongLoRA | 长上下文专用 | 支持 32K+ | 中 |
-
-### 🔥 高频追问 Top 3
-
-**Q：DoRA 的方向+幅度分解具体怎么做？**
-
-A：DoRA 把权重 W 分解成：
-$$W = m \cdot \frac{V}{\|V\|}$$
-- $m \in \mathbb{R}^d$：幅度向量
-- $V \in \mathbb{R}^{d \times d}$：方向矩阵
-- $V/\|V\|$ 是按列归一化
-
-微调时——
-- **m**：直接全量训练（向量小，不贵）
-- **V**：用 LoRA 训练（V + BA）
-- 最后归一化
-
-**直觉**：神经网络微调中，**方向和幅度的变化是相对独立的**——LoRA 把它们混在一起学，效率低；DoRA 解耦后更高效。
-
-**Q：什么时候应该用 DoRA 替代 LoRA？**
-
-A：**小 rank** 场景（r ≤ 8）。这时 LoRA 表达力不够，DoRA 能挤出更多性能。**大 rank** 场景两者接近，用哪个都行。
-
-**Q：未来 PEFT 还会有什么大改进？**
-
-A：可能的方向——
-- **任务感知 PEFT**：根据任务类型自动决定 PEFT 配置
-- **Cross-task transfer**：多任务 LoRA 之间互相迁移
-- **Memory-efficient PEFT**：进一步降低显存
-- **理论分析**：理解 ΔW 低秩性的本质
-
-但**LoRA 本身已经接近成熟**，未来大改进可能来自**和量化、并行的结合**。
-
-### ⚠️ 常见陷阱
-
-- 不要只知道 LoRA——DoRA 是 2024 的趋势
-- AdaLoRA 理论好但工程复杂，没成为主流
-
----
-
-## Q7：LoRA 的合并部署与多 adapter ⭐⭐⭐
-
-### 🎯 一句话标答
-
-> 训练完后 LoRA 可以**直接合并**到原权重——`W' = W + αBA/r`，得到普通模型。也可以**保持分离**支持**多 adapter 切换**（同一 base 服务多任务）。
-
-### 🗣️ 30 秒口语版
-
-"LoRA 部署有两种选择——
-
-**方式 1：合并部署**
-
-把 LoRA 合并到 base model：
-`W' = W + (α/r) · BA`
-
-合并后是个普通的 BF16 模型，可以用 vLLM、TGI 等任何标准推理框架。**适合单一任务场景**。
-
-**方式 2：保持分离，运行时加载**
-
-Base model 加载一次，多个 LoRA adapter 按需切换。比如——
-- 中文对话场景：加载 chinese-lora
-- 代码生成场景：切换到 code-lora
-
-这种方式**节省显存**（多个任务共享 base）+ **快速切换**。HuggingFace PEFT 库直接支持。
-
-**Multi-LoRA 部署**：S-LoRA、PunicaServe 等工作支持**单 GPU 上同时服务多个 LoRA**——一次性 batch 里有不同任务的请求，路由到不同 adapter。**适合 SaaS 多租户场景**。"
-
-### 📐 合并实现
-
-```python
-# LoRA 合并代码
-def merge_lora_to_base(base_layer, lora_A, lora_B, alpha, r):
-    """把 LoRA 合并到 base 权重，等价于一次完整的 BF16 模型"""
-    delta_W = (alpha / r) * (lora_B @ lora_A)  # (out_dim, in_dim)
-    base_layer.weight.data += delta_W
-    return base_layer
+**做法**：
+1. 按 block（默认 64 个元素）做 absmax 缩放，把权重归一化到 $[-1, 1]$。
+2. 用标准正态分布的分位点构造 16 个量化值，并保证**0 被精确表示**（正半轴 8 个、负半轴 7 个、加上 0）。
+3. 📄 得到的 16 个值（bitsandbytes 实现）：
+```
+[-1.0, -0.6962, -0.5251, -0.3949, -0.2844, -0.1848, -0.0911, 0.0,
+  0.0796, 0.1609, 0.2461, 0.3379, 0.4407, 0.5626, 0.7230, 1.0]
 ```
 
-合并后的模型可以**保存为标准 HuggingFace 格式**：
+📄 论文称 NF4 对正态分布的数据是"信息论上最优"的数据类型。💭 这一说法有争议：后续有分析指出，在 block absmax 归一化之后，块内数据的分布已不再是标准正态，严格意义上的最优性不成立。
 
-```python
-from peft import PeftModel
+### 🧮 双重量化
 
-base = AutoModelForCausalLM.from_pretrained("meta-llama/Llama-3-8B")
-peft_model = PeftModel.from_pretrained(base, "your-lora-adapter")
-merged = peft_model.merge_and_unload()  # 合并并返回普通模型
-merged.save_pretrained("merged-llama-3-8b")
-```
+- 一级量化：每 64 个权重一个 fp32 缩放常数，额外开销 $32/64 = 0.5$ bit/参数。
+- 二级量化：把这些常数用 FP8 量化，每 256 个常数一个 fp32 的二级缩放常数，额外开销 $8/64 + 32/(64\times256) \approx 0.127$ bit/参数。
+- 🧮 每参数节省约 0.373 bit。📄 论文报告对 65B 模型约节省 3 GB。
 
-### 🔥 高频追问 Top 3
+### 📄 分页优化器
 
-**Q：合并后能再次微调吗？**
+使用 NVIDIA 统一内存，在 GPU 显存不足时，**自动把优化器状态分页到 CPU 内存**，需要时再换回来，以处理长序列 mini-batch 等造成的显存峰值，避免 OOM。
 
-A：可以——把合并后的模型当成新 base，再加新 LoRA 训练。这是**逐步微调**的常见做法：
-- Base → SFT-LoRA → 合并 → DPO-LoRA → 合并
+### 📄 实验结论
 
-但要小心——多次合并会**累积训练误差**，建议链路尽量短。
+- NF4 + 双重量化的 QLoRA 能完全恢复 16-bit LoRA 在 MMLU 上的表现；用 FP4 的 QLoRA 比 16-bit LoRA 低约 1 个百分点。
+- 在评测设置规范的学术基准上，4-bit QLoRA 与 16-bit 全参微调、16-bit LoRA 的表现相当。
+- 要达到全参微调的效果，需要把 LoRA 加到所有线性层上。
+- 他们用 QLoRA 训练的 Guanaco 系列模型在 Vicuna 基准上表现很强。
 
-**Q：多 LoRA 同时服务怎么实现高效？**
+> ❌ 旧版的 MMLU 对比表（全参 63.9 / LoRA 63.4 / QLoRA 63.5 / INT4 61.8）和"4×3090 能微调 70B""性能损失约 1–2%"没有出处。论文中对比的是 **FP4** 而不是 INT4。
 
-A：S-LoRA 这类系统的核心思路——
-- **Base 权重 KV Cache 共享**：所有请求共用 base 前向
-- **LoRA 部分动态加载**：每个请求带 adapter ID
-- **Unified Paging**：LoRA 权重在 GPU 上 paging，按需加载
-
-实测 S-LoRA 单卡能服务**几百个 LoRA**，吞吐和单一模型接近。
+### 🔥 高频追问
 
 **Q：QLoRA 训完怎么部署？**
 
-A：见 Q5 的最后一个追问——通常**合并并反量化回 BF16**：
-1. 用 BF16 加载 base model
-2. 加载 QLoRA adapter
-3. 合并 LoRA 到 BF16 权重
-4. 保存为标准 BF16 模型
-5. 用 vLLM 等推理
+A：常见做法是把 LoRA 合并到 bf16 权重中再部署。⚠️ 有一个细节：LoRA 是在**量化后的权重**上训练的，它学到的增量补偿了量化误差的一部分。如果合并到**原始的 bf16 权重**上，函数会和训练时略有不同；更严格的做法是合并到**反量化后的权重**上。合并后如果再重新量化（例如为了 4-bit 推理），还会引入新的量化误差。
 
-这样部署时享受 BF16 标准框架的所有优化。
+**Q：QLoRA 能用于继续预训练吗？**
 
-### ⚠️ 常见陷阱
+A：可以运行，但受 LoRA 本身"学得少"的限制（Q9）。需要注入大量新知识时，全参训练通常更好。
 
-- LoRA 合并是无损的——`W' = W + αBA/r` 数学上等价
-- Multi-LoRA 服务需要专门系统（S-LoRA），不是简单 add
-
-### 📚 延伸阅读
-- [S-LoRA](https://arxiv.org/abs/2311.03285) - 多 LoRA 服务系统
+### 📚 出处
+- Dettmers et al. *QLoRA: Efficient Finetuning of Quantized LLMs*. NeurIPS 2023. arXiv:2305.14314
+- Dettmers et al. *8-bit Optimizers via Block-wise Quantization*. ICLR 2022. arXiv:2110.02861
 
 ---
 
-## Q8：LoRA 在 MoE 上的特殊问题 ⭐⭐⭐
+## Q6：LoRA 变体：AdaLoRA、DoRA、VeRA、LoRA+、PiSSA、GaLore ⭐⭐⭐⭐
+
+### 🔍 主要变体
+
+| 方法 | 核心思想 | 出处 |
+|---|---|---|
+| **AdaLoRA** | 用 $P\Lambda Q$ 的 SVD 形式参数化增量，根据重要性得分**剪掉不重要的奇异值**，在不同矩阵间自适应分配 rank 预算 | 📄 Zhang et al., ICLR 2023 |
+| **DoRA** | 把权重分解为**幅度**和**方向**：$W' = m\cdot\frac{W_0+BA}{\lVert W_0+BA\rVert_c}$（按列归一化），幅度向量 $m$ 直接训练，方向用 LoRA 更新 | 📄 Liu et al., ICML 2024（NVIDIA） |
+| **VeRA** | 所有层**共享一对冻结的随机矩阵** $A, B$，每层只训练两个缩放向量 $d, b$：$\Delta W = \Lambda_b B\Lambda_d A$；参数量比 LoRA 少一个数量级以上 | 📄 Kopiczko et al., ICLR 2024 |
+| **LoRA+** | $B$ 的学习率设为 $A$ 的 $\lambda$ 倍（约 16） | 📄 Hayou et al., ICML 2024 |
+| **rsLoRA** | 缩放因子改为 $\alpha/\sqrt r$ | 📄 Kalajdzievski 2023 |
+| **PiSSA** | 用 $W_0$ 的**主奇异向量**初始化 $A, B$，冻结剩余部分，收敛更快 | 📄 Meng et al., NeurIPS 2024 |
+| **LoRA-GA** | 用梯度的 SVD 初始化 $A, B$，使第一步更新逼近全参微调的梯度方向 | 📄 Wang et al., NeurIPS 2024 |
+| **GaLore** | 不是加低秩增量，而是把**梯度投影到低秩子空间**来压缩优化器状态，仍然是全参训练 | 📄 Zhao et al., ICML 2024 |
+| **LongLoRA** | 训练时使用分组移位的稀疏注意力（S²-Attn），并让 embedding 和 norm 层可训练，高效扩展上下文 | 📄 Chen et al., ICLR 2024 |
+
+### 🔥 高频追问
+
+**Q：DoRA 为什么有效？**
+
+A：📄 DoRA 论文分析了全参微调和 LoRA 的权重更新：在全参微调中，幅度的变化和方向的变化呈**负相关**（方向变化大时幅度变化小），而 LoRA 的两者呈正相关，说明 LoRA 难以独立地调整两者。DoRA 通过解耦幅度和方向，让学习模式更接近全参微调，在多个任务上一致地优于 LoRA。
+
+> ❌ 旧版写"DoRA 在 r=4 时约等于 LoRA r=16"，没有出处。
+
+**Q：VeRA 只训练向量，为什么还能工作？**
+
+A：💭 它依赖"随机投影"在高维空间中的表达能力：冻结的随机矩阵提供了一组固定的方向，每层只学习在这些方向上的缩放。这与 Aghajanyan et al. 2021 的"内在维度"结论相呼应：在随机子空间中优化就足够完成很多微调任务。
+
+**Q：GaLore 和 LoRA 的本质区别？**
+
+A：LoRA 限制的是**权重更新的形式**（低秩增量）；GaLore 限制的是**优化器看到的梯度**（每隔一段时间更新投影子空间），权重本身可以发生满秩的变化。因此 GaLore 可以用于预训练，并且对显存的节省主要来自优化器状态。
+
+### 📚 出处
+- Zhang et al. *AdaLoRA*. ICLR 2023. arXiv:2303.10512
+- Liu et al. *DoRA*. ICML 2024. arXiv:2402.09353
+- Kopiczko et al. *VeRA*. ICLR 2024. arXiv:2310.11454
+- Meng et al. *PiSSA*. NeurIPS 2024. arXiv:2404.02948
+- Wang et al. *LoRA-GA*. NeurIPS 2024. arXiv:2407.05000
+- Zhao et al. *GaLore*. ICML 2024. arXiv:2403.03507
+- Chen et al. *LongLoRA*. ICLR 2024. arXiv:2309.12307
+
+---
+
+## Q7：合并、多 adapter 服务与模型融合 ⭐⭐⭐
 
 ### 🎯 一句话标答
 
-> MoE 模型的 LoRA 有特殊问题——**每个 expert 是独立的 FFN**，怎么加 LoRA 是个设计选择：**全 expert 共享一个 LoRA**（参数少但能力弱）vs **每 expert 独立 LoRA**（参数多但能力强）。
+> 单任务部署时把 LoRA 合并进权重（$W' = W_0 + \frac{\alpha}{r}BA$），推理零开销；多任务/多租户时保持 adapter 独立，由服务系统在同一 batch 中为不同请求应用不同的 adapter（📄 Punica、S-LoRA，vLLM 等推理引擎也已支持）。多个微调模型还可以通过**模型融合**合成一个模型。
 
-### 🗣️ 30 秒口语版
+### 📄 多 LoRA 服务
 
-"MoE + LoRA 是个 2024 才被广泛讨论的问题，是 DeepSeek 系面试的高级题。
+- 📄 **Punica**（Chen et al., MLSys 2024）：提出 SGMV（Segmented Gather Matrix-Vector multiplication）kernel，让同一个 batch 中使用不同 LoRA 的请求可以一起计算，base 模型的计算只做一次。
+- 📄 **S-LoRA**（Sheng et al., MLSys 2024）：把所有 adapter 存在主存中，按需加载到 GPU；用**统一分页**同时管理 KV Cache 和 adapter 权重以减少碎片；配合定制的 kernel 和张量并行策略，可以同时服务**数千个** adapter。
 
-**MoE 模型结构**：FFN 不是一个，而是 E 个 expert（DeepSeek-V3 有 256 个）。每个 token 经过 router 选 top-k 个 expert 处理。
+> ⚠️ 旧版写"Base 权重 KV Cache 共享"，概念混淆：不同请求共享的是 **base 模型的权重和计算**，KV Cache 是每个请求自己的。
 
-**LoRA 加在哪里的选择**——
+### 📄 模型融合
 
-**方案 1：只加在 Attention 层**——最简单，避开了 expert 问题。但 FFN 是表达力的大头，效果可能受限。
+| 方法 | 做法 | 出处 |
+|---|---|---|
+| Task Arithmetic | 任务向量 $\tau = W_{ft} - W_0$，可以相加（多任务）或相减（遗忘某种行为） | 📄 Ilharco et al., ICLR 2023 |
+| TIES-Merging | 修剪小幅度的更新、解决符号冲突、只合并符号一致的部分 | 📄 Yadav et al., NeurIPS 2023 |
+| DARE | 随机丢弃大部分更新并对剩余部分重新缩放，再合并 | 📄 Yu et al., ICML 2024 |
+| Model Soups | 对同一预训练模型、不同超参数微调出的权重取平均 | 📄 Wortsman et al., ICML 2022 |
 
-**方案 2：每个 expert 加独立 LoRA**——每个 expert 有自己的 BA 矩阵。参数量大（× E），但每个 expert 学到的能力被独立微调。
+### 🔥 高频追问
 
-**方案 3：全 expert 共享一个 LoRA**——所有 expert 用同一对 BA。参数极少，但所有 expert "同步"被影响，破坏了 expert 专业化。
+**Q：合并后还能继续微调吗？**
 
-**方案 4：Router 加 LoRA**——只调 expert 选择策略，不动 expert 本身。新颖但效果未充分验证。
+A：可以，把合并后的模型当作新的 base 即可（例如 SFT LoRA → 合并 → DPO LoRA）。💭 每次合并都会在 bf16 中引入舍入误差，链路过长时要注意。
 
-**当前最佳实践**：Attention 全加 + FFN 选择性加（top-k 高频 expert），或者只调 router。DeepSeek 论文里 PEFT 部分讨论过这个问题。"
+---
 
-### 🔍 不同方案对比
+## Q8：MoE 模型的参数高效微调 ⭐⭐⭐⭐
 
-| 方案 | 参数量 | 表达力 | 训练稳定性 | 适用场景 |
-|---|---|---|---|---|
-| 仅 Attention | 小 | 中 | 高 | 简单 SFT |
-| 全 expert 独立 LoRA | 大（×E） | 强 | 中 | 全面微调 |
-| 共享 LoRA | 极小 | 弱 | 高 | 风格调整 |
-| Router LoRA | 极小 | 中 | 中 | 任务分配优化 |
+### 🎯 一句话标答
 
-### 🔥 高频追问 Top 3
+> MoE 的 FFN 由很多专家组成，PEFT 需要决定"调哪些专家、怎么调"。📄 DeepSeek 的 **ESFT**（Expert-Specialized Fine-Tuning）发现：同一任务的路由分布高度集中，不同任务激活的专家差异很大；因此**只微调与任务最相关的少数专家**、冻结其余专家和其他模块，就能匹配甚至超过全参微调，同时更高效、遗忘更少。
 
-**Q：MoE LoRA 的训练有什么坑？**
+### 🔍 设计选择
 
-A：
-- **Load balance**：某些 expert 见到的 token 少，LoRA 训不充分
-- **冷启动**：训练初期 router 可能不稳定，影响 LoRA 学习
-- **显存放大**：每 expert 独立 LoRA 会让参数量乘 E 倍
+| 方案 | 说明 |
+|---|---|
+| 只在注意力层加 LoRA | 最简单，但没有覆盖占大部分参数的专家 |
+| 每个专家各自加 LoRA | 参数量随专家数线性增长；冷门专家见到的 token 少，训练不充分 |
+| 📄 ESFT：只调任务相关的专家 | 按路由统计（平均门控分数或被选中的 token 比例）挑选专家，全参训练这些专家，其余冻结 |
+| 微调路由器 | 改变专家选择；可能破坏负载均衡 |
 
-**Q：DeepSeek-V3 的 PEFT 怎么做？**
+📄 ESFT 论文还发现，**专家粒度越细**的 MoE 模型，越容易挑出与下游任务最相关的专家组合。
 
-A：DeepSeek 报告里详细讨论过——
-- Attention 部分加 LoRA
-- FFN 部分（包括 MoE expert）选择性加
-- 用更小的 lr 防遗忘
+### 📄 反过来：用"LoRA 专家"缓解遗忘
 
-具体配置因任务而异，但**MoE 模型 PEFT 不像 Dense 那样标准化**。
+- 📄 **LoRAMoE**（Dou et al., ACL 2024）：在 dense 模型中引入多个 LoRA 作为"专家"并用路由器组合，一部分专家负责保留世界知识，另一部分学习下游任务，以缓解大规模 SFT 中的知识遗忘。
+- 📄 Zadouri et al. 2023（*Pushing Mixture of Experts to the Limit*）：用多个轻量的 PEFT 模块组成 MoE，以极少的参数接近全参微调。
 
-**Q：MoE LoRA 部署有什么挑战？**
+> ❌ 旧版写"DeepSeek-V3 报告里详细讨论过 PEFT：Attention 加 LoRA、FFN 选择性加"，DeepSeek-V3 报告中没有这部分内容，已替换为 DeepSeek 的 ESFT 论文。
 
-A：合并时——
-- 每个 expert 独立合并自己的 LoRA
-- 共享 LoRA 需要乘到所有 expert
-- 部署时和 dense LoRA 一样可以合并
+### 📚 出处
+- Wang et al.（DeepSeek）. *Let the Expert Stick to His Last: Expert-Specialized Fine-Tuning for Sparse Architectural Large Language Models*. EMNLP 2024. arXiv:2407.01906
+- Dou et al. *LoRAMoE*. ACL 2024. arXiv:2312.09979
+- Zadouri et al. 2023. arXiv:2309.05444
 
-挑战在于**多 LoRA 服务时的 expert 路由**——不同 adapter 可能改变路由策略，复杂度高。
+---
 
-### ⚠️ 常见陷阱
+## Q9：研究问题：LoRA 与全参微调等价吗？ ⭐⭐⭐⭐⭐
 
-- MoE LoRA 没有标准方案——需要任务特定调整
-- Load balance 问题在 MoE LoRA 上更突出
+### 📄 证据一：LoRA 学得少，忘得少
 
-### 🏢 大厂偏好
+📄 **Biderman et al., TMLR 2024**（*LoRA Learns Less and Forgets Less*）在代码和数学两个领域、继续预训练（约 200 亿 token）和指令微调（约 10 万条）两种设置下比较 LoRA 与全参微调：
+- 在大多数设置中，**LoRA 的目标领域性能明显低于全参微调**。
+- 但 LoRA 更好地**保留了 base 模型在目标领域之外的能力**，遗忘更少；它的正则化效果强于 weight decay 和 dropout 等常见方法。
+- 全参微调学到的权重扰动的秩比常见 LoRA 配置的 rank **高 10–100 倍**，这可以部分解释两者的差距。
+- 建议：LoRA 的学习率要比全参微调高，并且应加到所有层上。
 
-- **DeepSeek 系**：可能问 MoE PEFT 设计
-- **应用算法岗**：MoE 模型还不普及，问的少
+### 📄 证据二：LoRA 的解在结构上不同
+
+📄 **Shuttleworth et al., NeurIPS 2025**（*LoRA vs Full Fine-tuning: An Illusion of Equivalence*）：即使下游表现相同，LoRA 训练出的权重矩阵中会出现**"入侵维度"**：与预训练权重的所有奇异向量都几乎正交、却拥有很大奇异值的新方向；全参微调则没有。通过事后缩小这些维度的奇异值，可以显著改善对预训练分布的建模，而下游任务性能只轻微下降，说明入侵维度与遗忘有因果关系。在顺序微调多个任务时，积累了入侵维度的 LoRA 模型表现更差。更高 rank 并使用 rank 稳定缩放的 LoRA，与全参微调更接近。
+
+### 📄 证据三：正确配置时，LoRA 可以匹配全参微调
+
+📄 **Thinking Machines, *LoRA Without Regret*（2025）**：在 SFT（Tülu 3、OpenThoughts3 数据）和 RL（MATH、GSM8K 等）上用 Llama 3 和 Qwen3 做了大规模扫描，结论包括：
+- 在中小规模的 SFT 数据上，把 LoRA 加到**所有层（尤其是 MLP 和 MoE 层）**，LoRA 能匹配全参微调；只加在注意力层上效果明显更差，即使参数量相同。
+- 当数据量超过 LoRA 的容量时，LoRA 开始落后于全参微调。
+- 在 **RL** 中，即使 **rank 为 1** 的 LoRA 也能匹配全参微调。作者的解释是：基于结果的 RL 每个 episode 只提供 $O(1)$ 比特的信息，需要的容量很小。
+- 最优学习率约为全参微调的 10 倍；对大 batch 的容忍度不如全参微调。
+
+### 💡 综合起来
+
+| 场景 | LoRA 能否替代全参 |
+|---|---|
+| 风格、格式、指令遵循（小数据 SFT） | 能，前提是所有层都加、学习率调好 |
+| RL（结果奖励） | 能，很小的 rank 就够 |
+| 大量新知识（继续预训练、大规模领域 SFT） | 通常不能完全替代，但遗忘更少 |
+| 顺序多任务 | 要注意入侵维度带来的遗忘积累 |
+
+❓ **开放问题**：
+- 能否在训练过程中检测并抑制入侵维度？
+- "LoRA 容量"与数据量之间是否存在可预测的 scaling 关系？
+- 为什么 RL 需要的容量如此之小？这对理解 RL 学到了什么（第 11 章）有什么启示？
+
+### 🧪 动手验证思路
+
+1. 在同一 SFT 数据上分别训练 LoRA（只加注意力 / 加所有线性层）和全参微调，在目标任务和通用基准上比较，验证"学得少、忘得少"。
+2. 对训练好的 LoRA，计算 $W_0$ 和 $W_0+\Delta W$ 的 SVD，按 Shuttleworth et al. 的方法统计入侵维度。
+3. 比较 $\alpha/r$ 与 $\alpha/\sqrt r$ 在 $r = 8, 64, 256$ 时的学习曲线。
+4. 实现 NF4 量化，对一个真实模型的权重矩阵比较 NF4 与均匀 INT4、FP4 的量化误差。
+
+### 📚 出处
+- Biderman et al. TMLR 2024. arXiv:2405.09673
+- Shuttleworth et al. *LoRA vs Full Fine-tuning: An Illusion of Equivalence*. NeurIPS 2025. arXiv:2410.21228
+- Schulman et al. *LoRA Without Regret*. Thinking Machines Lab, 2025
 
 ---
 
 ## 📝 本章小结
 
-| 关键点 | 你必须能脱口而出 |
-|---|---|
-| 全参代价 | 显存爆炸 + 存储多份 + 训得慢 |
-| 四类 PEFT | Adapter / Prefix / Prompt / LoRA |
-| LoRA 公式 | y = Wx + (α/r)·BAx，B=0、A 高斯初始化 |
-| LoRA 参数量 | 2dr（vs 全参 d²），节省 d/(2r) 倍 |
-| α 和 r 关系 | 通常 α = 2r |
-| LoRA lr | 比全参大 10× |
-| QLoRA 三大创新 | NF4 量化 + Double Quantization + Paged Optimizer |
-| NF4 vs INT4 | NF4 适配正态分布，精度高 |
-| DoRA | 方向+幅度分解，小 r 显著优于 LoRA |
-| LoRA 合并 | W' = W + αBA/r，数学等价 |
+| 关键点 | 你必须能脱口而出 | 性质 |
+|---|---|---|
+| LoRA 公式 | $h = W_0x + \frac{\alpha}{r}BAx$；$B=0$、$A$ 随机 | 🧮 |
+| 参数量 | $r(d_{in}+d_{out})$ | 🧮 |
+| 初始化 | $B=0$ 允许更大学习率（Hayou 2024） | 📄 |
+| 加在哪里 | 所有线性层（含 MLP）；小 rank 覆盖更多矩阵更好 | 📄 |
+| 缩放 | $\alpha/r$；大 rank 用 $\alpha/\sqrt r$（rsLoRA） | 📄 |
+| 学习率 | 约为全参的 10 倍；LoRA+：$\eta_B \approx 16\eta_A$ | 📄 |
+| QLoRA | NF4（正态分位点 + 精确的 0）、双重量化省约 0.37 bit/参数、分页优化器；NF4 恢复 16-bit LoRA 效果 | 🧮 + 📄 |
+| DoRA / VeRA | 幅度–方向解耦 / 共享冻结随机矩阵 + 缩放向量 | 📄 |
+| 多 LoRA 服务 | Punica 的 SGMV、S-LoRA 的统一分页 | 📄 |
+| MoE PEFT | ESFT：只调任务相关专家 | 📄 |
+| 等价性 | 学得少忘得少；入侵维度；RL 中 rank 1 即可 | 📄 |
 
 ## ✅ 自测题
 
-1. 用 30 行 PyTorch 写一个 LoRALinear 类，包含初始化、forward、merge 三个方法
-2. 解释为什么 LoRA 假设 ΔW 是低秩的？有哪些证据支撑？
-3. QLoRA 的 NF4 量化为什么比 INT4 好？给出量化点的设计原理
-4. r=16, α=32 改成 r=32 后，α 应该设多少？为什么这个关系很重要？
-5. 你要训一个支持 10 种语言的对话 LoRA，怎么设计部署架构？
+1. 推导 LoRA 中 $A$、$B$ 的梯度，并说明为什么第一步只有 $B$ 会被更新。
+2. 计算 LLaMA-2 7B 在 $r=16$、所有线性层加 LoRA 时的可训练参数量。
+3. 写出 NF4 的构造方法，并计算双重量化每参数节省多少 bit。
+4. 为什么 QLoRA 训练出的 adapter 最好合并到反量化后的权重上？
+5. 用三篇研究回答"LoRA 能否替代全参微调"，并说明在什么场景下答案不同。
+6. 你要为 100 个企业客户分别定制模型，给出训练和服务的完整方案。
 
 ---
 
-> **下一章预告**：第 9 章｜RLHF 与 PPO——完整的奖励模型训练、PPO 算法推导、Reward Hacking 问题。RLHF 是 ChatGPT 出圈的关键，但实现复杂，是字节 / DeepMind 等顶尖团队的高频考点。
+> **下一章预告**：第 9 章｜RLHF 与 PPO——奖励模型与 Bradley-Terry、PPO 的推导（重要性采样、裁剪、GAE）、KL 约束、reward hacking 与过优化的 scaling law。
