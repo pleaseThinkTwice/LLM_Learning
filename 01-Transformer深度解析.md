@@ -1,24 +1,27 @@
 # 第 1 章｜Transformer 深度解析
 
-> **本章定位**：LLM 面试的"地基题"，几乎 100% 会被问到。一面用来开场试水，二面挖数学细节，三面看你能不能讲清楚演化脉络。读完本章，你应该能做到：**遇到任何 Transformer 相关的题，张口就有 3 个层次的答案**——30 秒应付一面、3 分钟支撑二面、追问能聊到论文细节。
+> **本章定位**：Transformer 是所有后续章节的地基。本章的目标不是背公式，而是对每个设计都能回答三个问题：**它解决了什么问题？证据是什么？哪些地方至今仍有争议？** 能做到这一点，面试中的追问和将来读论文都会轻松很多。
 
-> **配套章节**：位置编码 → 第 2 章 / 归一化与激活 → 第 3 章 / 手撕 Attention 代码 → 第 9 章。本章只讲架构与注意力。
+> **配套章节**：位置编码 → 第 2 章 / 归一化与激活 → 第 3 章 / KV Cache 与推理 → 第 12 章 / FlashAttention 与推理引擎 → 第 15 章
+
+> **标记约定**（见 README）：📄 论文结论 / 🧮 可推导 / 💭 直觉或有争议的解释 / ❓ 开放问题
 
 ---
 
-## 📌 本章导航：高频题分布
+## 📌 本章导航
 
-| 序号 | 题目 | 难度 | 频率（字节/阿里/腾讯/Meta） | 类型 |
-|---|---|---|---|---|
-| Q1 | 描述 Transformer 整体架构 | ⭐⭐⭐ | 8 / 5 / 4 / 3 | 一面开场 |
-| Q2 | 为什么 LLM 都是 Decoder-Only？ | ⭐⭐⭐⭐⭐ | 6 / 2 / 1 / 4 | 概念深度 |
-| Q3 | 手推 Self-Attention 计算过程 | ⭐⭐⭐⭐⭐ | **11 / 8 / 6 / 5** | 必问 |
-| Q4 | 为什么除以 √d_k？ | ⭐⭐⭐⭐ | 7 / 3 / 2 / 2 | 数学敏感度 |
-| Q5 | Self-Attention 复杂度 | ⭐⭐⭐⭐ | 5 / 3 / 2 / 4 | 系统能力 |
-| Q6 | Multi-Head 的作用，为什么不用单头？ | ⭐⭐⭐⭐⭐ | 6 / 3 / 2 / 3 | 易答错 |
-| Q7 | MHA → MQA → GQA → MLA 演化 | ⭐⭐⭐⭐⭐ | 7 / 4 / 3 / 2 | 加分题 |
-| Q8 | Causal Mask 原理与实现 | ⭐⭐⭐ | 4 / 2 / 2 / 1 | 实现细节 |
-| Q9 | Encoder/Decoder/Enc-Dec 选型 | ⭐⭐⭐ | 2 / 3 / 2 / 1 | 应用题 |
+| 序号 | 题目 | 难度 | 类型 |
+|---|---|---|---|
+| Q1 | 描述 Transformer 整体架构 | ⭐⭐⭐ | 开场 |
+| Q2 | 为什么现在的 LLM 大多是 Decoder-Only？ | ⭐⭐⭐⭐⭐ | 概念深度 |
+| Q3 | 手推 Self-Attention 计算过程 | ⭐⭐⭐⭐⭐ | 必问 + 手撕 |
+| Q4 | 为什么除以 √d_k？ | ⭐⭐⭐⭐ | 数学 |
+| Q5 | Self-Attention 的复杂度 | ⭐⭐⭐⭐ | 系统 |
+| Q6 | Multi-Head 的作用，为什么不用单头？ | ⭐⭐⭐⭐⭐ | 易答错 |
+| Q7 | MHA → MQA → GQA → MLA 演化 | ⭐⭐⭐⭐⭐ | 加分 |
+| Q8 | Causal Mask 原理与实现 | ⭐⭐⭐ | 实现细节 |
+| Q9 | Encoder / Decoder / Enc-Dec 选型 | ⭐⭐⭐ | 应用 |
+| Q10 | 研究前沿：Attention 之后是什么？ | ⭐⭐⭐⭐⭐ | 研究视角 |
 
 ---
 
@@ -26,182 +29,176 @@
 
 ### 🎯 一句话标答
 
-> Transformer 是一个**完全基于注意力机制**的序列建模架构，由 Encoder 和 Decoder 两半组成，核心组件是 Self-Attention + FFN，靠残差连接和 LayerNorm 撑住深度。
-
-### 🗣️ 30 秒口语版（一面开场用）
-
-"好的。Transformer 整体可以看成两半——Encoder 负责把输入读懂，Decoder 负责把输出写出来。每一半都是同一种层堆 N 次，原论文是 6 层，现在的大模型一般 30 到 100 层都有。
-
-每一层里头其实就两个核心模块：一个是 **多头自注意力**，让序列中的 token 之间互相'看见';另一个是 **前馈网络 FFN**，做特征变换。这两个模块外面都套着一层残差连接和 LayerNorm，保证训练能稳住。
-
-Decoder 比 Encoder 多一个东西——**Cross-Attention**，用来让 Decoder 在生成时去看 Encoder 的输出。另外 Decoder 的 Self-Attention 是带 Causal Mask 的，保证生成时只能看到前面，不能偷看后面。
-
-不过现在主流的 LLM——GPT、LLaMA、DeepSeek 这些——已经把 Encoder 砍掉了，只保留 Decoder，这个我们后面可以展开讲。"
-
-### 📐 3 分钟深度版（二面用）
-
-**先讲结构，再讲信息流**。
-
-**结构上**，原始 Transformer 是这样的：
-
-```
-                ┌──────────────────┐
-   输入序列  →  │   Encoder × N    │  → 上下文表示
-                └──────────────────┘
-                         ↓ (cross attention)
-                ┌──────────────────┐
-   目标序列  →  │   Decoder × N    │  → 输出概率分布
-                └──────────────────┘
-                         ↓
-                       Softmax
-                         ↓
-                      下一个 token
-```
-
-**Encoder 单层结构**：
-```
-x → MHA(LN(x)) + x → FFN(LN(x)) + x  (Pre-Norm 写法)
-```
-
-**Decoder 单层结构**多一步 Cross-Attention：
-```
-x → Masked-MHA → +x → LN → Cross-Attn(with Enc out) → +x → LN → FFN → +x
-```
-
-**信息流的关键点有四个**：
-
-第一，**Embedding + 位置编码**。Token 通过 Embedding 矩阵变成 d 维向量，但纯 Embedding 是位置无关的，所以要加上位置信息——原论文用的是正弦余弦，现在主流用 RoPE（这个第 2 章细讲）。
-
-第二，**Self-Attention 是核心创新**。它替代了 RNN 的"逐步传递信息"，改成"全连接式地一次性建模所有 pair-wise 关系"，这就是为什么能并行。
-
-第三，**残差 + Norm**。这两个不是装饰品，是必需品。残差解决梯度消失，让 100 层的网络也能训；Norm 让激活值分布稳定，避免训崩。
-
-第四，**FFN 占了大头参数**。FFN 中间维度通常是 4d，所以一层里 FFN 的参数量大概是 Attention 的两倍。LLaMA 用 SwiGLU 后中间维度变成 8d/3，参数量等价。
-
-### 🔥 高频追问 Top 3
-
-**Q：Transformer 和 RNN 比，优势是什么？为什么能取代 RNN？**
-
-A：核心就两点——**并行 + 长程依赖**。RNN 是按时间步串行的，没法并行；而且远距离信息要经过很多步传递，容易梯度消失。Self-Attention 一次性看完整个序列，任意两个 token 之间都是 O(1) 的距离，训练能并行，长距离建模也好得多。代价是 O(n²) 的复杂度，所以长序列又成了问题，这是后来 Flash Attention 这些工作要解决的。
-
-**Q：FFN 是干什么的？只有 Attention 不行吗？**
-
-A：Attention 本质是**信息的混合**——让 token 之间互相交换信息。但单纯的混合没有非线性变换能力，所以 FFN 负责**逐 token 的特征变换**。可以理解为 Attention 横向通信、FFN 纵向加工，两者交替才能让网络学到复杂表示。有论文做过消融实验，去掉 FFN 性能大幅下降。
-
-**Q：为什么是堆 N 层而不是设计得更复杂？**
-
-A：这是深度学习的通用经验——同样参数量下，**深而窄** 通常比 **浅而宽** 效果好。多层能学到层次化的表示：浅层学语法、中层学语义、深层学逻辑。但层数也不是越多越好，会有边际收益递减和训练不稳定的问题，所以实践中是个平衡。
-
-### ⚠️ 常见陷阱
-
-1. **混淆"Transformer 架构"和"现代 LLM 架构"**：原始 Transformer 是 Encoder-Decoder（用于翻译），现代 LLM 是 Decoder-Only。很多人答题时直接套原论文图，但面试官想听的是"你知道演化"。
-2. **忘了说残差和 Norm**：这两个是训练能成功的关键，没讲到会被扣分。
-3. **把 FFN 说成是"分类头"**：FFN 是中间层，不是输出层。分类头在最顶上，是 Linear + Softmax。
-
-### 🏢 大厂偏好
-
-- **字节**：常追问"如果让你改进 Transformer 你会怎么做"，看你对架构的理解深度
-- **阿里**：喜欢从"Transformer 怎么用于推荐场景"切入
-- **Meta**：喜欢追问 LLaMA 相比原始 Transformer 改了什么（答：Pre-Norm、RMSNorm、SwiGLU、RoPE、GQA）
-
-### 📚 延伸阅读
-- [Attention Is All You Need](https://arxiv.org/abs/1706.03762) §3.1-§3.3 必读
-- [The Illustrated Transformer](https://jalammar.github.io/illustrated-transformer/) - 经典图解
-
----
-
-## Q2：为什么现在的 LLM 都是 Decoder-Only？ ⭐⭐⭐⭐⭐
-
-### 🎯 一句话标答
-
-> 因为 Decoder-Only 在**统一性、Scaling 友好度、推理效率、数据利用率**这四个维度上全面胜出，而 GPT 系列实证证明了它能做几乎所有任务。
+> 📄 Transformer（Vaswani et al. 2017）是一个以**注意力**为核心、去掉了循环和卷积的序列模型。原始版本是 Encoder-Decoder 结构，每层由**多头注意力 + 逐位置前馈网络（FFN）**组成，每个子层都包上**残差连接和 LayerNorm**。现代 LLM 大多只保留 Decoder，并做了 Pre-Norm、RMSNorm、SwiGLU、RoPE、GQA 等改动。
 
 ### 🗣️ 30 秒口语版
 
-"这个问题挺有意思的。我觉得可以从四个角度回答。
+"原始 Transformer 是为机器翻译设计的 Encoder-Decoder 结构。Encoder 双向读入源句，Decoder 带因果 mask 自回归地生成目标句，并通过 cross-attention 读取 Encoder 的输出。原论文两边各 6 层。
 
-第一，**任务统一**。Decoder-Only 把所有任务——分类、翻译、问答、生成——都统一成'下一个 token 预测'，模型不用为不同任务设计不同的头，非常优雅。
+每层有两个核心子层：多头自注意力负责 token 之间的信息交换，FFN 对每个位置单独做非线性变换。每个子层外面都有残差连接和 LayerNorm。
 
-第二，**Scaling 更友好**。OpenAI 的 Scaling Law 论文是基于 Decoder-Only 做的，工业界投钱时倾向于一条被验证过的路线，所以越投越多，飞轮就转起来了。
+现在的主流 LLM，比如 GPT、LLaMA、Qwen、DeepSeek，都是 Decoder-Only，只保留带因果 mask 的自注意力和 FFN。和原论文相比，主要改动有：LN 从子层之后挪到之前（Pre-Norm），换成 RMSNorm；激活从 ReLU 换成 SwiGLU；位置编码从正弦换成 RoPE；注意力从 MHA 换成 GQA 或 MLA，以减小 KV Cache。"
 
-第三，**推理效率高**。Decoder 天然是因果的，KV Cache 可以直接用；Encoder-Decoder 还要做 Cross-Attention，工程上麻烦。
+### 📐 结构细节
 
-第四，**数据利用率高**。Decoder-Only 训练时每个 token 都是监督信号；BERT 那种 Masked LM 只有 15% 的 token 在产生梯度，效率差了一截。
-
-加起来，Decoder-Only 就成了现在的事实标准。"
-
-### 📐 3 分钟深度版
-
-如果让我说得更细一点，每条都能展开：
-
-**1. 任务统一性（最根本的原因）**
-
-GPT-3 之前的 NLP 是"百花齐放"——分类用 BERT、生成用 BART、问答用 T5，每种任务都有自己的范式。GPT-3 证明了一件事：**只要模型够大，next-token prediction 这一个范式就能 cover 所有任务**。
+**原始 Transformer（Post-Norm）**：
 
 ```
-情感分类  → 输入"评价：这个手机很好用，情感是：" → 模型续写"正面"
-翻译     → 输入"中文：你好  英文：" → 模型续写"Hello"
-代码生成 → 输入"# 求斐波那契数列\ndef fib(n):" → 模型续写函数体
+Encoder 层:  x = LN(x + SelfAttn(x))
+             x = LN(x + FFN(x))
+
+Decoder 层:  x = LN(x + MaskedSelfAttn(x))
+             x = LN(x + CrossAttn(x, enc_out))
+             x = LN(x + FFN(x))
 ```
 
-任务统一带来的好处是：训练数据无限大（互联网上的任何文本都能用），不用专门标注。
+**现代 Decoder-Only LLM（Pre-Norm，以 LLaMA 为例）**：
 
-**2. Scaling Law 的偏爱**
+```
+h = x + Attn(RMSNorm(x))          # 因果自注意力，GQA + RoPE
+x = h + FFN(RMSNorm(h))           # SwiGLU
+... 重复 L 层 ...
+logits = LMHead(RMSNorm(x))       # Pre-Norm 需要最后再做一次归一化
+```
 
-OpenAI 2020 年的 Kaplan 论文和后来的 Chinchilla 都是基于 Decoder-Only 推导的。这些规律告诉我们："参数、数据、算力按特定比例增加，loss 会平滑下降"——这给工业界投资提供了确定性。一旦确定性建立，资源就会涌入，进一步放大优势。
+> ⚠️ 不要把两种写法混在一张图里。原论文是 Post-Norm；Pre-Norm 是后来的改动（第 3 章 Q4）。
 
-Encoder-Decoder 架构（如 T5）当然也能 scaling，但因为 GPT 路线先跑通，生态、工具链、数据集都集中在 Decoder-Only，后来者很难翻盘。
+**原论文 base 模型的超参**（📄 Vaswani et al. 2017, Table 3）：$d_{model}=512$，$h=8$，$d_k=d_v=64$，$d_{ff}=2048$，$N=6$。
 
-**3. In-Context Learning 涌现**
+**参数量的粗算**（忽略 norm 和 bias，标准 MHA + $d_{ff}=4d$）：
 
-GPT-3 论文里发现：当 Decoder-Only 模型超过 60B 参数后，**zero-shot 和 few-shot 能力突然涌现**。给几个例子就能学会新任务，不用微调。这个能力在 Encoder-Decoder 上也有，但 Decoder-Only 的形式更自然——把示例和目标拼成一个序列即可。
-
-**4. 推理工程的友好**
-
-这点经常被忽略，但工业落地非常重要。Decoder-Only 是**单向因果**的，所以：
-- KV Cache 实现简单（每次只 append，不重算）
-- 投机解码、并行解码这些加速技术天然适配
-- Streaming 输出体验好
-
-Encoder-Decoder 推理时要先跑 Encoder 一次，再 Decoder 自回归生成，工程上更复杂，KV Cache 也分成两部分。
-
-**5. 数据利用率**
-
-| 训练范式 | 监督信号密度 |
+| 子层 | 参数量 |
 |---|---|
-| BERT (MLM) | 只有 15% 的 token 被 mask，其他都"白送" |
-| Decoder-Only (CLM) | 每个 token 都贡献 loss |
+| Attention（$W_Q, W_K, W_V, W_O$） | $4d^2$ |
+| FFN（两层，$d_{ff}=4d$） | $8d^2$ |
+| 每层合计 | $12d^2$ |
 
-同样训练 1 万亿 token，Decoder-Only 拿到的有效梯度信号是 BERT 的 6 倍多。
+🧮 所以 FFN 约占每层参数的 2/3。总参数量约为 $12Ld^2$ 加上词表嵌入。这个公式能用来快速估算模型规模，例如 GPT-3 175B：$L=96, d=12288$，$12 \times 96 \times 12288^2 \approx 174\text{B}$。用了 GQA 后 attention 参数会更少，SwiGLU 取 $d_{ff}=\frac{8}{3}d$ 时 FFN 仍约为 $8d^2$（第 3 章 Q6）。
 
-### 🔥 高频追问 Top 3
+### 🔥 高频追问
 
-**Q：那 BERT 是不是就过时了？**
+**Q：Transformer 为什么能取代 RNN？**
 
-A：不完全是。BERT 这种 Encoder-Only 模型在**需要双向理解、不需要生成**的任务上还是有优势的，比如稠密检索（Dense Retrieval）、序列标注、句子表示。现在的 embedding 模型大多还是 Encoder 架构，比如 BGE、E5。但纯生成任务的赛道，BERT 确实已经退场了。
+A：📄 原论文从三个角度对比了 self-attention、RNN 和 CNN（Vaswani et al. 2017, Table 1）：
+- **每层计算量**：self-attention 为 $O(n^2 d)$，RNN 为 $O(n d^2)$。
+- **串行操作数**：self-attention 为 $O(1)$，RNN 为 $O(n)$。这决定了训练能否并行。
+- **任意两位置间的最长路径**：self-attention 为 $O(1)$，RNN 为 $O(n)$。路径越短，长程依赖越容易学。
 
-**Q：那 Encoder-Decoder 还有存在的必要吗？**
+代价是对序列长度的二次复杂度（Q5）。
 
-A：在**输入输出严格对齐**的任务上还是有价值的，比如机器翻译、文档摘要、语音识别。Whisper 就是 Encoder-Decoder，因为音频和文字是两种模态，分开处理更合理。但通用对话场景，Decoder-Only 已经赢了。
+**Q：FFN 是干什么的？只有 Attention 不行吗？**
 
-**Q：Decoder-Only 有什么缺点吗？**
+A：两个角度：
+- 📄 **理论**：Dong, Cordonnier, Loukas 2021（*Attention is Not All You Need: Pure Attention Loses Rank Doubly Exponentially with Depth*）证明，去掉残差连接和 MLP 的纯注意力网络，输出会随深度**双指数地**收敛到秩为 1 的矩阵，也就是所有 token 的表示趋于相同。残差连接和 MLP 能抑制这种退化。
+- 📄 **可解释性**：Geva et al. 2021（*Transformer Feed-Forward Layers Are Key-Value Memories*）把 FFN 的第一层看成 key、第二层看成 value，发现很多 key 对应可解释的文本模式。后续的知识编辑工作（如 ROME, Meng et al. 2022）也把事实性知识定位在中间层的 FFN。
 
-A：有的。最明显的是**双向理解的天然劣势**——比如完形填空类任务，Encoder 的双向 Attention 理论上更适合。但实践中 Decoder-Only 靠规模和数据补回来了。另外，Decoder-Only 对**长输入的理解**不如 Encoder（因为只能从左到右看），所以现在很多检索增强系统会先用 Encoder 模型做 embedding。
+💭 一个常用的比喻是"Attention 负责 token 之间的通信，FFN 负责每个 token 内部的计算"。
+
+**Q：层数和宽度怎么权衡？"深而窄"一定更好吗？**
+
+A：📄 不一定。Kaplan et al. 2020 发现，在固定（非嵌入）参数量下，**只要形状不太极端，loss 对深宽比的依赖很弱**：深宽比在 40 倍的范围内变化，loss 只变化几个百分点。所以"深而窄一定更好"不是一个可靠的说法。实践中层数还受流水线并行切分、推理延迟（层数越多，串行步骤越多）和训练稳定性的影响。
+
+💭 关于"浅层学语法、深层学语义"：📄 Tenney et al. 2019（*BERT Rediscovers the Classical NLP Pipeline*）用探针发现，BERT 中词性、句法、语义角色、指代等信息的峰值大致按经典 NLP 流水线的顺序分布在不同层。但这是针对 BERT 的探针结果，不要把它说成所有 LLM 的普遍规律。
 
 ### ⚠️ 常见陷阱
 
-- 不要只答"因为 GPT 跑通了"——这是结果，不是原因。要从架构层面给出技术理由。
-- 不要忘了提 In-Context Learning，这是 Decoder-Only 最神奇的涌现能力。
-- 别把 Decoder-Only 说得太完美——双向理解的劣势要承认，体现你的客观性。
+1. 区分"原始 Transformer"（Enc-Dec、Post-Norm、ReLU、正弦位置编码）和"现代 LLM"（Decoder-Only、Pre-Norm、SwiGLU、RoPE、GQA）。
+2. 能说出 $12Ld^2$ 的参数量估算。
+3. FFN 是每层都有的中间模块，不是输出层。
 
-### 🏢 大厂偏好
+### 📚 出处
+- Vaswani et al. *Attention Is All You Need*. NeurIPS 2017. arXiv:1706.03762
+- Dong et al. *Attention is Not All You Need: Pure Attention Loses Rank Doubly Exponentially with Depth*. ICML 2021. arXiv:2103.03404
+- Geva et al. *Transformer Feed-Forward Layers Are Key-Value Memories*. EMNLP 2021. arXiv:2012.14913
+- Meng et al. *Locating and Editing Factual Associations in GPT*（ROME）. NeurIPS 2022. arXiv:2202.05262
+- Kaplan et al. *Scaling Laws for Neural Language Models*. 2020. arXiv:2001.08361
+- Tenney et al. *BERT Rediscovers the Classical NLP Pipeline*. ACL 2019. arXiv:1905.05950
+- Jay Alammar. *The Illustrated Transformer*（图解入门）
 
-- **字节**：会追问"如果让你设计下一代架构，你怎么改 Decoder-Only？"——往 MoE、SSM、混合架构方向答
-- **Anthropic / Meta**：偏爱讨论 BERT 退场的本质原因，看你对训练范式的理解
+---
 
-### 📚 延伸阅读
-- [GPT-3 Paper](https://arxiv.org/abs/2005.14165) - In-context learning 的起源
-- [What Language Model Architecture and Pretraining Objective Work Best for Zero-Shot Generalization?](https://arxiv.org/abs/2204.05832) - 直接对比三种架构
+## Q2：为什么现在的 LLM 大多是 Decoder-Only？ ⭐⭐⭐⭐⭐
+
+### 🎯 一句话标答
+
+> 没有一个单一的"证明"。比较有说服力的理由是：**目标简单统一**（只做下一个 token 预测，任何文本都是训练数据）；📄 **在纯无监督预训练后零样本泛化最好**（Wang et al. 2022 的对照实验）；**推理工程简单**（一套 KV Cache，便于复用前缀）；以及 GPT 系列跑通之后形成的**生态惯性**。但这个结论有条件，Encoder-Decoder 在某些设置下更好，2025 年也有 T5Gemma 这样的回归尝试。
+
+### 🗣️ 30 秒口语版
+
+"我会分成证据和解释两部分说。
+
+证据方面，最直接的是 BigScience 2022 年的对照实验：同样约 5B 参数、约 170B token，比较因果 decoder、非因果 decoder 和 encoder-decoder。结论是，**只做无监督预训练时，因果 decoder + 自回归目标的零样本泛化最好**；但如果再加多任务指令微调，非因果结构加 MLM 目标反而最好。所以 Decoder-Only 的优势是有条件的。
+
+解释方面：第一，目标统一，任何文本都能直接训练，所有任务都能写成续写；第二，推理简单，只有一套 KV Cache，prefix caching、投机解码都容易做；第三，工程和生态惯性，GPT-3 之后 scaling law、训练框架、推理引擎都围绕 decoder-only 优化。
+
+还有一个理论层面的说法：苏剑林认为双向注意力矩阵容易出现低秩问题，而因果 mask 下的注意力矩阵是下三角的，对角线为正，所以一定满秩，表达能力可能更强。不过这只是一种解释，没有被广泛验证。"
+
+### 📄 对照实验：Wang et al. 2022（BigScience）
+
+| 设置 | 结论 |
+|---|---|
+| 只做无监督预训练，测零样本 | **因果 decoder + 自回归语言建模**最好 |
+| 预训练 + 多任务提示微调，测零样本 | **非因果 decoder + MLM** 最好 |
+| 结构转换 | 预训练好的模型可以在两种结构之间高效地互相适配 |
+
+这篇论文告诉你：**"Decoder-Only 最好"依赖于训练流程**。这是一个比"因为 GPT 成功了"更有力的回答。
+
+### 💡 常见理由逐条审视
+
+**1. 目标统一、数据无限** —— 成立。任何文本都可以直接用于下一个 token 预测；分类、翻译、问答都能写成续写（GPT-2/GPT-3 的核心论点）。
+
+**2. 监督信号密度** —— 部分成立，要说清楚。
+- 因果 LM 中每个位置都计算 loss；BERT 的 MLM 只对约 15% 被 mask 的位置计算 loss。
+- 📄 ELECTRA（Clark et al. 2020）正是针对 MLM 只从少量 token 学习这一低效问题，改为对所有 token 判断是否被替换。
+- 💭 但"6 倍信号"只是数 token 的粗算：MLM 每个预测位置能看到双向上下文，信息量不同，不能直接按位置数比较。
+
+**3. In-Context Learning** —— 要准确表述。
+- 📄 GPT-3（Brown et al. 2020）展示了少样本 in-context learning，并且整体上随模型规模增大而增强。
+- ❌ 旧版写的"GPT-3 发现超过 60B 后 zero/few-shot 突然涌现"没有出处。"涌现能力"的说法来自 📄 Wei et al. 2022（*Emergent Abilities of Large Language Models*），而 📄 Schaeffer et al. 2023（*Are Emergent Abilities of Large Language Models a Mirage?*，NeurIPS 2023）认为很多"突然涌现"是不连续评测指标造成的假象。面试时把两边都讲出来，体现你对证据的判断力。
+- Encoder-Decoder 同样能做 in-context learning，只是格式上不如把示例直接拼进一个序列自然。
+
+**4. 推理工程** —— 成立。
+- Decoder-Only 只有一套自注意力 KV Cache；Enc-Dec 需要先跑 encoder，decoder 还要维护 self-attention 和 cross-attention 两套 cache。
+- 多轮对话中，新输入直接接在已有序列后面，前缀的 KV 可以复用（prefix caching，→ 第 12、15 章）。
+
+**5. Scaling Law** —— 📄 Kaplan 2020 和 Chinchilla（Hoffmann et al. 2022）的实验都基于 decoder-only Transformer。但这说明的是"研究资源集中在这条路线上"，不能推出 Enc-Dec 不能 scale（T5、UL2 都有大规模版本）。
+
+**6. 低秩论证** —— 💭 苏剑林《为什么现在的 LLM 都是 Decoder-only 的架构？》（科学空间，2023）：
+- 🧮 因果注意力矩阵 $A$ 是下三角矩阵，对角元 $A_{ii} = \text{softmax}(\cdot)_{ii} > 0$，所以 $\det A = \prod_i A_{ii} > 0$，**一定满秩**。
+- 双向注意力矩阵 $\text{softmax}(QK^T/\sqrt{d})$ 来自秩不超过 $d_k$ 的 $QK^T$，在 $n \gg d_k$ 时可能出现低秩瓶颈（另见 Q6 的 Bhojanapalli et al. 2020）。
+- ❓ 这是一个有启发性的解释，但"满秩是否等于更好"没有被严格验证。
+
+### 🔥 高频追问
+
+**Q：BERT 是不是过时了？**
+
+A：在生成任务上基本退出了，但在"只需要理解、不需要生成"的场景还在用，比如分类、序列标注、轻量级重排序。📄 2024 年的 ModernBERT（Warner et al.）对 encoder 做了现代化改造（RoPE、更长上下文、更大数据），说明这条线仍在更新。
+
+**Q：Embedding 模型是不是都用 Encoder？**
+
+A：❌ 旧版说"Embedding 模型大多是 Encoder（BGE、E5）"已经过时。早期主流确实是 BERT 类 encoder，但从 2024 年起，基于 decoder LLM 的 embedding 模型在 MTEB 榜单上表现突出，例如 E5-Mistral（Wang et al. 2024）、NV-Embed、gte-Qwen、Qwen3-Embedding。常见做法是取最后一个 token 的表示，或者把因果 mask 改成双向后再做对比学习（📄 LLM2Vec, BehnamGhader et al. 2024）。
+
+**Q：Encoder-Decoder 还有前途吗？**
+
+A：📄 2025 年 Google 发布了 **T5Gemma**：用预训练好的 decoder-only Gemma 2 初始化 encoder 和 decoder，再用 UL2 或 PrefixLM 目标继续训练，并支持不同大小的 encoder 和 decoder 组合（如 9B encoder + 2B decoder）。Google 称其在质量与推理开销之间取得了更好的平衡；随后又推出了基于 Gemma 3、支持多模态的 T5Gemma 2。这说明 Enc-Dec 在"输入长、输出短"的场景（摘要、理解后生成）仍有竞争力。Whisper 等语音模型也一直是 Enc-Dec。
+
+### ⚠️ 常见陷阱
+
+- 不要只答"因为 GPT 跑通了"：这是结果，不是原因。
+- 不要说"GPT-3 在 60B 处突然涌现"。
+- 不要把 Decoder-Only 的优势说成无条件的：Wang et al. 2022 证明了它依赖训练流程。
+
+### 📚 出处
+- Wang et al. *What Language Model Architecture and Pretraining Objective Works Best for Zero-Shot Generalization?* ICML 2022. arXiv:2204.05832
+- Brown et al. *Language Models are Few-Shot Learners*（GPT-3）. NeurIPS 2020. arXiv:2005.14165
+- Wei et al. *Emergent Abilities of Large Language Models*. TMLR 2022. arXiv:2206.07682
+- Schaeffer et al. *Are Emergent Abilities of Large Language Models a Mirage?* NeurIPS 2023. arXiv:2304.15004
+- Clark et al. *ELECTRA*. ICLR 2020. arXiv:2003.10555
+- Hoffmann et al. *Training Compute-Optimal Large Language Models*（Chinchilla）. 2022. arXiv:2203.15556
+- 苏剑林.《为什么现在的 LLM 都是 Decoder-only 的架构？》科学空间, 2023. https://kexue.fm/archives/9529
+- Warner et al. *ModernBERT*. 2024. arXiv:2412.13663
+- BehnamGhader et al. *LLM2Vec*. COLM 2024. arXiv:2404.05961
+- Google. *T5Gemma* 博客（2025-07）：https://developers.googleblog.com/en/t5gemma/
 
 ---
 
@@ -209,120 +206,95 @@ A：有的。最明显的是**双向理解的天然劣势**——比如完形填
 
 ### 🎯 一句话标答
 
-> Self-Attention = **"用 Q 去查 K，得到权重；用权重对 V 加权求和"**，完整公式是 `softmax(QKᵀ/√d_k) · V`。
+> 每个 token 投影出 Query、Key、Value；用 Q 和所有 K 的点积（缩放后）经过按行 softmax 得到注意力权重，再对 V 加权求和：$\text{Attention}(Q,K,V) = \text{softmax}\left(\frac{QK^T}{\sqrt{d_k}}\right)V$。
 
 ### 🗣️ 30 秒口语版
 
-"好的，我从直觉到公式讲一下。
+"直觉上，self-attention 让每个 token 回头看序列中的所有 token，按相关性加权汇总信息。
 
-直觉上，Self-Attention 干的事情就是——对序列中的每一个 token，让它**回头看一遍其他所有 token，按相关性加权汇总信息**。
+每个 token 的表示会被投影成三个向量：Query 表示'我要找什么'，Key 表示'我能被怎样匹配'，Value 表示'我要传递的内容'。用 Q 和所有 K 做点积得到相关性分数，除以 √d_k 缩放，按行做 softmax 变成权重，再用权重对 V 加权求和，就得到这个 token 的新表示。"
 
-具体怎么做呢？每个 token 的 embedding 会被映射成三个东西：**Q 是 Query，代表'我要查什么'**；**K 是 Key，代表'我能被怎么查'**；**V 是 Value，代表'我的实际内容'**。
+### 📐 推导
 
-然后用 Q 和所有 K 做点积，得到一组相似度分数——分数越高代表越相关。这组分数除以 √d_k 做缩放，再过 Softmax 归一化成概率分布，最后用这个概率分布去加权 V，就得到了这个 token 的新表示。
+**Step 0**：输入 $X \in \mathbb{R}^{n \times d_{model}}$。
 
-公式就是这个：**softmax(QKᵀ/√d_k) · V**。"
+**Step 1**：线性投影，$W^Q, W^K \in \mathbb{R}^{d_{model} \times d_k}$，$W^V \in \mathbb{R}^{d_{model} \times d_v}$：
+$$Q = XW^Q,\quad K = XW^K,\quad V = XW^V$$
 
-### 📐 3 分钟深度版（含完整推导）
-
-**Step 0：输入定义**
-
-设输入序列长度为 n，每个 token 的 embedding 维度为 d_model：
-$$X \in \mathbb{R}^{n \times d_{model}}$$
-
-**Step 1：三次线性变换得到 Q, K, V**
-
-引入三个可学习的权重矩阵 $W^Q, W^K \in \mathbb{R}^{d_{model} \times d_k}$ 和 $W^V \in \mathbb{R}^{d_{model} \times d_v}$：
-
-$$Q = XW^Q \in \mathbb{R}^{n \times d_k}$$
-$$K = XW^K \in \mathbb{R}^{n \times d_k}$$
-$$V = XW^V \in \mathbb{R}^{n \times d_v}$$
-
-通常 $d_k = d_v = d_{model}$（在 MHA 里会被拆成多头）。
-
-**Step 2：计算注意力分数矩阵**
-
+**Step 2**：分数矩阵
 $$S = \frac{QK^T}{\sqrt{d_k}} \in \mathbb{R}^{n \times n}$$
+$S_{ij}$ 表示位置 $i$ 对位置 $j$ 的关注程度（缩放原因见 Q4）。
 
-矩阵 S 的 $(i, j)$ 位置表示 **token i 对 token j 的关注程度**（除以 √d_k 的原因看 Q4）。
+**Step 3**：按行 softmax
+$$A_{ij} = \frac{\exp(S_{ij})}{\sum_{k} \exp(S_{ik})}$$
+每一行之和为 1。
 
-**Step 3：Softmax 归一化（按行做）**
+**Step 4**：加权聚合
+$$\text{Output}_i = \sum_j A_{ij} V_j, \qquad \text{Output} = AV \in \mathbb{R}^{n \times d_v}$$
 
-$$A = \text{softmax}(S), \quad A_{ij} = \frac{\exp(S_{ij})}{\sum_{k=1}^{n} \exp(S_{ik})}$$
+🧮 **一个有用的改写**：$S = X W^Q (W^K)^T X^T / \sqrt{d_k}$。中间的 $W^Q (W^K)^T \in \mathbb{R}^{d_{model} \times d_{model}}$ 是一个**秩不超过 $d_k$ 的双线性形式**。这说明：
+- Q、K 分开参数化，等价于学习一个低秩的、**非对称**的相似度矩阵；
+- 这个低秩结构也是 MLA 中"权重吸收"技巧的基础（Q7）。
 
-注意是**按行 softmax**——每一行加起来等于 1，代表 token i 对所有 token 的关注权重分布。
-
-**Step 4：加权聚合 V**
-
-$$\text{Output} = AV \in \mathbb{R}^{n \times d_v}$$
-
-每一行 Output[i] = $\sum_j A_{ij} \cdot V_j$，就是按权重把所有 token 的 value 加起来。
-
-**最终公式合一**：
-
-$$\text{Attention}(Q, K, V) = \text{softmax}\left(\frac{QK^T}{\sqrt{d_k}}\right) V$$
-
-### 💻 关键代码片段
+### 💻 手撕代码
 
 ```python
+import math
 import torch
 import torch.nn.functional as F
-import math
 
 def self_attention(X, W_Q, W_K, W_V, mask=None):
-    Q = X @ W_Q                                    # (n, d_k)
-    K = X @ W_K                                    # (n, d_k)
-    V = X @ W_V                                    # (n, d_v)
-    
-    d_k = Q.shape[-1]
-    scores = Q @ K.transpose(-2, -1) / math.sqrt(d_k)  # (n, n)
-    
-    if mask is not None:
-        scores = scores.masked_fill(mask == 0, float('-inf'))
-    
-    attn = F.softmax(scores, dim=-1)               # (n, n)，按行归一化
-    return attn @ V                                # (n, d_v)
+    Q, K, V = X @ W_Q, X @ W_K, X @ W_V                     # (..., n, d_k / d_v)
+    scores = Q @ K.transpose(-2, -1) / math.sqrt(Q.size(-1))  # (..., n, n)
+    if mask is not None:                                    # mask: True = 允许关注
+        scores = scores.masked_fill(~mask, float("-inf"))
+    attn = F.softmax(scores, dim=-1)                        # 按行归一化
+    return attn @ V
 ```
 
-**⚠️ 实现要点**（面试常考）：
-1. `transpose(-2, -1)` 是把最后两维转置，**支持任意 batch 维度**
-2. mask 一定要在 softmax **之前** 加，加在之后就无效了
-3. softmax 必须 `dim=-1`，不能写错
+实际工程中直接用 `F.scaled_dot_product_attention(q, k, v, is_causal=True)`，它会自动选择 FlashAttention 等高效 kernel。
 
-### 🔥 高频追问 Top 3
+**实现要点**：
+1. `transpose(-2, -1)` 只转置最后两维，支持任意 batch / head 维度。
+2. mask 必须加在 softmax **之前**的 logit 上。
+3. softmax 在最后一维（key 维）上做。
+4. 数值稳定：softmax 的标准实现会先减去每行最大值，PyTorch 已内置。
 
-**Q：为什么是 Q、K、V 三个矩阵而不是一个？直接 X·Xᵀ 不行吗？**
+### 🔥 高频追问
 
-A：这是个好问题。直接用 X·Xᵀ 也能算相似度，但有两个致命问题：
-- **表达能力受限**——一个 token 在"查询"和"被查"两种角色下，应该呈现不同的特征。比如 "is" 这个词作为 query 想找主语，作为 key 想被动词找到，两种角色的表示应该是不同的。Q、K 分开允许模型学到这种角色化的表示。
-- **对称性问题**——X·Xᵀ 是对称矩阵，token A 对 B 的注意力 = B 对 A 的注意力，这显然不合理。引入 Q、K 后矩阵不再对称，能建模有向关系。
-- **V 单独存在**是因为：注意力计算的是"该看谁"，但真正传递的内容可以不一样。比如计算时关注的是"语法相关性"，但传递的可能是"语义内容"。
+**Q：为什么要 Q、K、V 三个矩阵？直接用 $XX^T$ 不行吗？**
 
-**Q：Softmax 之前的注意力分数矩阵 QKᵀ 表达了什么？**
+A：
+- 🧮 $XX^T$ 是**对称**的，$i$ 对 $j$ 的分数等于 $j$ 对 $i$ 的分数，无法表示有方向的关系（例如"代词找它指代的名词"）。$XW^Q(W^K)^TX^T$ 一般不对称。
+- 🧮 $XX^T$ 的对角线 $\|x_i\|^2$ 通常最大，每个 token 会倾向于关注自己。
+- V 单独投影，让"用什么来匹配"（Q、K 子空间）和"传递什么内容"（V 子空间）解耦。
 
-A：表达的是 token 之间的**未归一化相似度**——本质上是把每个 token 的 query 和所有 token 的 key 做内积，内积大说明它们在某个子空间里方向接近，相关性高。后面 softmax 把它转成概率分布，方便加权。
+**Q：Softmax 能换成别的吗？**
 
-**Q：如果不用 Softmax，能不能用别的归一化方式？**
+A：可以，这是一个活跃的研究方向：
+- **线性注意力**：📄 Katharopoulos et al. 2020（*Transformers are RNNs*）用核函数特征映射 $\phi(q)^T\phi(k)$ 代替 $\exp(q^Tk)$，利用矩阵乘法结合律把复杂度降到 $O(n)$，并且可以写成 RNN 形式。📄 Performer（Choromanski et al. 2020）用随机特征近似 softmax 核。
+- 📄 **Linformer**（Wang et al. 2020）不是核方法，而是把 K、V 沿序列维投影到固定长度，属于**低秩近似**。
+- 📄 **Sigmoid attention**（Ramapuram et al. 2024, Apple）用逐元素 sigmoid 代替 softmax，并分析了需要的偏置项和稳定性条件。
+- 近两年更主流的是**线性注意力 / 状态空间模型与 softmax 注意力的混合架构**（见 Q10）。
 
-A：可以，但有取舍。Linear Attention（用 ReLU 之类）能把复杂度从 O(n²) 降到 O(n)，代价是性能略降；最近的工作如 Linformer、Performer 都在探索。但 Softmax 有几个独特优点：① 严格的概率解释；② 数值稳定（最大值减去）；③ 梯度性质好。所以目前主流还是 Softmax。
+**Q：怎么从理论上理解 attention？**
+
+A：📄 Tsai et al. 2019（*Transformer Dissection*）把 attention 看成**核平滑器**（kernel smoother）：输出是 value 的加权平均，权重由 query 和 key 之间的核函数决定。这个视角把 attention 和经典的 Nadaraya-Watson 核回归联系了起来，也自然引出了各种核近似方法。
 
 ### ⚠️ 常见陷阱
 
-1. **顺序写反**：必须先除以 √d_k 再做 softmax，反了就没意义
-2. **mask 加在 softmax 之后**：那时候已经是概率了，乘以 0 不会让其他位置重新归一化
-3. **忘了 softmax 是按行的**：按列就完全错了
-4. **混淆 d_k 和 d_model**：在 MHA 里 d_k = d_model / n_heads
+1. 先缩放再 softmax，顺序不能反。
+2. mask 加在 softmax 之前。
+3. softmax 按行（每个 query）做。
+4. 在 MHA 中 $d_k = d_{model}/h$，不要和 $d_{model}$ 混淆。
 
-### 🏢 大厂偏好
-
-- **字节**：必考的手撕题，会要求**白板写出来 + 解释维度变化**
-- **阿里**：会追问"如果序列特别长怎么办"，引出 Flash Attention / 线性注意力
-- **Meta**：喜欢追问"Attention 的本质是 kernel smoother，你怎么看"——这是个偏理论的角度
-
-### 📚 延伸阅读
-- 原论文 §3.2 - 注意力公式
-- [Transformers from Scratch](https://e2eml.school/transformers.html) - 从零推导
-- [Attention as Soft Dictionary Lookup](https://blog.research.google/2022/04/learning-from-weakly-supervised-data.html) - 把 attention 理解成软查字典
+### 📚 出处
+- Vaswani et al. 2017, §3.2
+- Katharopoulos et al. *Transformers are RNNs*. ICML 2020. arXiv:2006.16236
+- Choromanski et al. *Rethinking Attention with Performers*. ICLR 2021. arXiv:2009.14794
+- Wang et al. *Linformer*. 2020. arXiv:2006.04768
+- Ramapuram et al. *Theory, Analysis, and Best Practices for Sigmoid Self-Attention*. 2024. arXiv:2409.04431
+- Tsai et al. *Transformer Dissection*. EMNLP 2019. arXiv:1908.11775
 
 ---
 
@@ -330,67 +302,54 @@ A：可以，但有取舍。Linear Attention（用 ReLU 之类）能把复杂度
 
 ### 🎯 一句话标答
 
-> 因为不除会让 QKᵀ 的方差随 d_k 线性增长，导致 softmax 进入饱和区，梯度趋近于零，**根本训不动**。
+> 🧮 若 $q, k$ 的各分量独立、均值 0、方差 1，则 $q \cdot k$ 的方差为 $d_k$。不缩放时 logit 的尺度随 $\sqrt{d_k}$ 增长，softmax 会趋向 one-hot，梯度变得很小。除以 $\sqrt{d_k}$ 把方差拉回 1。📄 原论文的措辞是"我们**怀疑**大 $d_k$ 会让点积变大，把 softmax 推入梯度极小的区域"，这是一个合理的启发式，不是严格定理。
 
 ### 🗣️ 30 秒口语版
 
-"这个问题其实是个**数值稳定性问题**。
+"假设 q 和 k 的每一维独立、均值 0、方差 1，点积是 d_k 个乘积之和，方差就是 d_k。d_k = 128 时，标准差约为 11，logit 之间的差距很容易达到几十，softmax 几乎变成 one-hot。
 
-假设 Q 和 K 的每个元素都是均值 0、方差 1 的独立分布，那它们点积 q·k 的方差就等于 d_k——维度越大，方差越大。如果 d_k 是 64，那点积的方差就是 64，标准差 8，意味着分数可能跑到 ±20、±30 这种很大的范围。
+softmax 饱和时，雅可比矩阵 diag(p) − ppᵀ 接近零矩阵，梯度很难传回去。除以 √d_k 后方差变回 1，softmax 保持在比较平滑的区域。
 
-这时候 softmax 会怎么样？指数函数 e^x 在 x=20 和 x=10 之间差了一万倍，**softmax 会变成接近 one-hot**——一个位置接近 1，其他全接近 0。
+需要补充的是，原论文自己用的是'我们怀疑'这个说法，而且训练过程中 q 和 k 不再独立，所以 μP 理论会建议用 1/d_k 而不是 1/√d_k。"
 
-后果就是**梯度消失**——softmax 在饱和区导数接近 0，反向传播时梯度传不下去，模型训不动。
+### 🧮 推导
 
-除以 √d_k 之后，方差被拉回 1，softmax 分布平滑，梯度正常。"
+设 $q_i, k_i$ 相互独立，$\mathbb{E}[q_i]=\mathbb{E}[k_i]=0$，$\text{Var}(q_i)=\text{Var}(k_i)=1$：
+$$\mathbb{E}[q_ik_i] = 0, \qquad \text{Var}(q_ik_i) = \mathbb{E}[q_i^2]\mathbb{E}[k_i^2] = 1$$
+各分量独立，所以
+$$\text{Var}(q\cdot k) = \sum_{i=1}^{d_k}\text{Var}(q_ik_i) = d_k \quad\Rightarrow\quad \text{Var}\left(\frac{q\cdot k}{\sqrt{d_k}}\right) = 1$$
 
-### 📐 数学推导（二面会要求写）
+🧮 **softmax 饱和为什么会导致梯度消失**：令 $p = \text{softmax}(s)$，则
+$$\frac{\partial p}{\partial s} = \text{diag}(p) - pp^T$$
+当 $p$ 接近 one-hot（$p_j \approx 1$，其余 $\approx 0$）时，这个矩阵的每一项都接近 0。
 
-**前提假设**：Q 和 K 的每个元素 $q_i, k_i$ 都是 i.i.d.，均值为 0，方差为 1。
+📄 原论文第 3.2.1 节的脚注给出了上面的方差计算，正文用的是"We suspect that..."。
 
-**计算点积的方差**：
+### 🔥 高频追问
 
-$$q \cdot k = \sum_{i=1}^{d_k} q_i k_i$$
+**Q：为什么是 $\sqrt{d_k}$，不是 $d_k$？**
 
-因为 $q_i, k_i$ 独立且均值为 0：
-$$\mathbb{E}[q_i k_i] = \mathbb{E}[q_i] \mathbb{E}[k_i] = 0$$
-$$\text{Var}(q_i k_i) = \mathbb{E}[q_i^2 k_i^2] - 0 = \mathbb{E}[q_i^2]\mathbb{E}[k_i^2] = 1 \cdot 1 = 1$$
+A：🧮 在"各分量独立"的假设下，目标是让 logit 的**标准差**保持为常数，所以除以标准差 $\sqrt{d_k}$。如果除以 $d_k$，logit 的标准差变成 $1/\sqrt{d_k}$，分布会过于平坦。
 
-由独立性：
-$$\text{Var}(q \cdot k) = \sum_{i=1}^{d_k} \text{Var}(q_i k_i) = d_k$$
+📄 **但这个假设在训练中不一定成立。** μP（Yang et al. 2022, *Tensor Programs V*）的论点是：训练后 $q$ 和 $k$ 会变得相关（对齐），此时点积按 $d_k$ 而不是 $\sqrt{d_k}$ 增长，所以应使用 $1/d_k$ 缩放，才能让超参数在不同宽度间迁移。Cerebras-GPT 等采用 μP 的工作使用了 $1/d_{head}$。在**固定 head 维度**（如 128）、只扩展头数的常见设置下，两者只差一个常数因子。
 
-**所以除以 √d_k 后**：
-$$\text{Var}\left(\frac{q \cdot k}{\sqrt{d_k}}\right) = \frac{d_k}{d_k} = 1$$
+**Q：Q、K 的分布不满足假设怎么办？**
 
-方差被拉回 1，达到稳定。
+A：初始化时大致满足，训练过程中会偏离。大模型训练中 Q、K 的范数可能持续增长，导致 attention logit 过大、训练发散。这正是 **QK-Norm** 要解决的问题（第 3 章 Q8）：直接对 Q、K 做归一化，不再依赖初始化来保证尺度。
 
-### 🔥 高频追问 Top 3
+**Q：$1/\sqrt{d_k}$ 和温度是什么关系？**
 
-**Q：为什么是 √d_k 不是 d_k 或者 log(d_k)？**
-
-A：因为我们要做的是**让标准差归一**，方差是平方关系，所以开根号。如果除以 d_k，标准差变成 1/√d_k，又太小了，分布会过于平坦，softmax 退化成均匀分布，模型学不到有用的注意力 pattern。
-
-**Q：如果 Q、K 不是均值 0 方差 1 的分布呢？**
-
-A：实际训练中靠初始化（Xavier/Kaiming）保证大致满足。如果用了不合适的初始化或者归一化策略，这个假设可能会被破坏。这也是为什么现代 LLM 都很重视 Pre-Norm 和初始化方案，确保 QK 的分布稳定。
-
-**Q：除以 √d_k 是温度系数吗？**
-
-A：可以这么理解！1/√d_k 本质上就是一个**固定的温度系数**。如果我们想要更尖锐的注意力分布，可以再除一个更大的数（相当于降温）；想要更平滑就乘一个大于 1 的数（升温）。一些工作就是这么做的，比如 logit lens 分析时会调节温度。
+A：$1/\sqrt{d_k}$ 就是一个固定的温度系数。有的工作把它换成可学习的标量（如 Henry et al. 2020 的 QK-Norm 中的 $g$）。长上下文外推时，也有方法根据长度调整 attention 温度（例如 YaRN 中的温度修正，→ 第 2 章）。
 
 ### ⚠️ 常见陷阱
 
-- **不要只回答"数值稳定性"就完事**——面试官想听完整推导
-- **不要把 √d_k 解释成"经验值"**——它有严格的数学推导
-- **不要忘了独立性假设**——这是推导的前提
+- 要说出推导的前提（独立、零均值、单位方差），并知道这个前提在训练中会被打破。
+- 不要说"√d_k 有严格证明是最优的"：原论文自己说的是"suspect"。
 
-### 🏢 大厂偏好
-
-- **字节**：必问，要求白板推导
-- **微软 / Google**：会追问"如果不假设独立性，方差怎么算"——这是测概率论功底
-
-### 📚 延伸阅读
-- 原论文 §3.2.1 末尾的脚注
+### 📚 出处
+- Vaswani et al. 2017, §3.2.1 及脚注
+- Yang et al. *Tensor Programs V: Tuning Large Neural Networks via Zero-Shot Hyperparameter Transfer*. 2022. arXiv:2203.03466
+- Dey et al. *Cerebras-GPT*. 2023. arXiv:2304.03208
 
 ---
 
@@ -398,64 +357,55 @@ A：可以这么理解！1/√d_k 本质上就是一个**固定的温度系数**
 
 ### 🎯 一句话标答
 
-> 时间复杂度 **O(n²·d)**，空间复杂度 **O(n²)**，瓶颈在 n×n 的注意力矩阵。
+> 序列长度 $n$、隐藏维度 $d$ 时，单层 attention 的时间复杂度为 $O(nd^2 + n^2d)$（投影 + 分数与加权），朴素实现需要 $O(n^2)$ 的额外显存存放注意力矩阵。FlashAttention 不改变 FLOPs，但通过分块计算把额外显存降到 $O(n)$，并大幅减少显存读写。
 
-### 🗣️ 30 秒口语版
+### 📐 分解（单头视角，$d_k = d$）
 
-"Self-Attention 的复杂度分两块看。
-
-**时间上**，主要开销是两次大矩阵乘法：QKᵀ 是 (n,d)×(d,n) 得到 (n,n)，复杂度 O(n²d)；后面 A·V 又是 (n,n)×(n,d)，又是 O(n²d)。中间的 softmax 是 O(n²)。所以**总时间复杂度 O(n²d)**。
-
-**空间上**，最大的开销是中间的 n×n 注意力矩阵。这是 Flash Attention 要解决的核心问题——它通过分块计算，避免完整存这个矩阵，把空间复杂度从 O(n²) 降到 O(n)。
-
-序列变长时，n²d 的 n² 项很快主导。所以长上下文场景下，怎么优化这个二次复杂度是个核心问题，催生了 Linear Attention、Flash Attention、稀疏注意力等一系列工作。"
-
-### 📐 详细分解
-
-| 步骤 | 操作 | 时间复杂度 | 空间复杂度 |
+| 步骤 | 操作 | FLOPs（乘加记 2） | 中间结果 |
 |---|---|---|---|
-| 1. 三次线性投影 | (n,d)×(d,d) | O(nd²) | O(nd) |
-| 2. QKᵀ | (n,d)×(d,n) | O(n²d) | O(n²) ← 瓶颈 |
-| 3. 除以 √d_k | 逐元素 | O(n²) | O(n²) |
-| 4. Softmax | 逐行 | O(n²) | O(n²) |
-| 5. A·V | (n,n)×(n,d) | O(n²d) | O(nd) |
-| **合计** | | **O(n²d + nd²)** | **O(n²)** |
+| QKV 投影 | $(n,d)\times(d,3d)$ | $6nd^2$ | $O(nd)$ |
+| $QK^T$ | $(n,d)\times(d,n)$ | $2n^2d$ | $O(n^2)$ |
+| softmax | 逐行 | $O(n^2)$ | $O(n^2)$ |
+| $AV$ | $(n,n)\times(n,d)$ | $2n^2d$ | $O(nd)$ |
+| 输出投影 | $(n,d)\times(d,d)$ | $2nd^2$ | $O(nd)$ |
 
-**何时 n²d 主导，何时 nd² 主导？**
-- 当 **n > d** 时（长序列），n²d 主导
-- 当 **n < d** 时（短序列），nd² 主导（线性投影开销大）
+🧮 合计约 $8nd^2 + 4n^2d$。所以 **$n > 2d$ 时注意力部分开始主导**。例如 $d=4096$ 时，序列超过约 8K token，$n^2$ 项才超过投影项。如果再算上 FFN 的 $16nd^2$（$d_{ff}=4d$），整层中 attention 的二次项占主导需要更长的序列。这就是为什么在常见的 4K–8K 训练长度下，**大部分计算其实在矩阵投影和 FFN 上**。
 
-实际 LLM 一般是 n > d 或 n ≈ d，所以认为是 **O(n²d)**。
+> ⚠️ 加上多头后结论不变：$h$ 个头，每头 $d/h$ 维，二次项合计仍为 $4n^2d$。
 
-### 🔥 高频追问 Top 3
+### 🔥 高频追问
 
-**Q：MHA 的复杂度和单头一样吗？**
+**Q：FlashAttention 降低了什么？**
 
-A：**一样**。MHA 把 d 拆成 h 个 d/h 的头并行做，每个头是 O(n²·(d/h))，h 个头加起来还是 O(n²d)。所以多头免费提升了模型能力，没有额外计算开销。
+A：📄 Dao et al. 2022：FlashAttention 是 **IO 感知**的精确注意力算法。它把 Q、K、V 分块加载到 GPU 的片上 SRAM，用 online softmax 逐块累积结果，**从不在显存（HBM）中写出完整的 $n\times n$ 矩阵**。
+- FLOPs：不变（反向传播时为了省显存会重算一部分，FLOPs 略有增加）。
+- 额外显存：从 $O(n^2)$ 降到 $O(n)$。
+- 速度：因为 attention 主要受显存带宽限制，减少 HBM 读写带来了明显的实际加速。
+- 后续：FlashAttention-2（更好的并行划分）、FlashAttention-3（利用 Hopper 架构的异步和 FP8）。
 
-**Q：怎么把这个 O(n²) 降下来？**
+**Q：怎么把 $O(n^2)$ 降下来？**
 
-A：主流方法有三类——
-- **稀疏注意力**：只计算部分位置，比如 Longformer 的滑窗、BigBird 的局部+全局，复杂度降到 O(n)
-- **线性注意力**：用 kernel trick 把 softmax 拆解，比如 Linformer、Performer，复杂度 O(n)
-- **Flash Attention**：不改算法，改实现——通过 IO-aware 的 tiling 把空间降到 O(n)，时间还是 O(n²d) 但常数小很多
+A：几条路线：
+- **稀疏注意力**：📄 Longformer（滑窗 + 全局 token）、BigBird（滑窗 + 全局 + 随机），复杂度 $O(n)$。现代 LLM 中常见的是**滑动窗口与全局注意力交替**（如 Mistral 7B 的滑窗、Gemma 2/3 的局部-全局交替）。
+- **线性注意力 / SSM**：$O(n)$，并且推理时状态大小固定（Q10）。
+- **可训练的稀疏注意力**：📄 DeepSeek 的 NSA（Native Sparse Attention, 2025）在训练时就学习稀疏模式。
+- **FlashAttention**：不改变算法复杂度，只优化实现。
 
-**Q：为什么 KV Cache 之后 Decoder 推理是 O(n) 的？**
+**Q：带 KV Cache 的推理复杂度是多少？**
 
-A：因为推理时每次只生成一个新 token，新 token 的 Q 只需要和缓存的所有 K、V 算注意力——是 1×n 的运算，而不是 n×n。所以单步推理是 O(n·d)，生成 n 个 token 总共 O(n²·d)。这里的"O(n)"指的是单步，不是总体。
+A：生成第 $t$ 个 token 时，新 token 的 query 只需和 $t$ 个缓存的 K、V 计算：每步 attention 为 $O(td)$，生成 $n$ 个 token 共 $O(n^2d)$。更关键的是 decode 阶段每步都要**读完整个 KV Cache**，所以是**显存带宽受限**的（→ 第 12 章）。
 
 ### ⚠️ 常见陷阱
 
-- **混淆训练和推理的复杂度**：训练是 O(n²d) per step（一次性算所有 token），推理（带 KV Cache）是 O(nd) per token。
-- **忘了空间复杂度**：很多人只答时间，但工程上空间往往是真正的瓶颈。
+- 区分 FLOPs 和显存：FlashAttention 不减少 FLOPs。
+- 区分训练（并行处理整条序列）和推理（逐 token、受带宽限制）。
+- 不要以为短序列时 attention 是主要开销。
 
-### 🏢 大厂偏好
-
-- **字节 / 阿里**：必问，会追问怎么优化
-- **AI Infra 岗**：会要求详细到 FLOPs 量级的估算
-
-### 📚 延伸阅读
-- [Efficient Transformers: A Survey](https://arxiv.org/abs/2009.06732)
+### 📚 出处
+- Dao et al. *FlashAttention*. NeurIPS 2022. arXiv:2205.14135；*FlashAttention-2*. arXiv:2307.08691；Shah et al. *FlashAttention-3*. arXiv:2407.08608
+- Beltagy et al. *Longformer*. arXiv:2004.05150；Zaheer et al. *BigBird*. arXiv:2007.14062
+- Yuan et al. *Native Sparse Attention*. ACL 2025. arXiv:2502.11089
+- Tay et al. *Efficient Transformers: A Survey*. arXiv:2009.06732
 
 ---
 
@@ -463,75 +413,61 @@ A：因为推理时每次只生成一个新 token，新 token 的 Q 只需要和
 
 ### 🎯 一句话标答
 
-> 多头允许模型在**不同子空间并行学习不同类型的注意力模式**，参数量和计算量与单头相同，但表达能力更强。
+> 📄 原论文的说法是：多头让模型"**能同时关注来自不同表示子空间、不同位置的信息**"，单头会因为平均化而抑制这种能力。在把 $d_{model}$ 均分给各头的设置下，参数量和 FLOPs 与单头相同。但它不是完全免费的：每头维度变小会带来**低秩瓶颈**，而且训练好的模型中很多头是冗余的。
 
 ### 🗣️ 30 秒口语版
 
-"好问题。先讲个直觉——单头注意力只能学**一种**关注模式，但语言里其实有很多种关系：语法上的主谓关系、语义上的指代关系、长距离的话题关系。指望一个头同时学好所有这些，太难了。
+"一个 softmax 只能产生一种加权分布。如果一个位置既要关注相邻的词，又要关注远处的指代对象，单头只能把这些需求平均在一起。多头把 d_model 拆成 h 份，每份独立做一次 attention，再拼接起来投影回去，这样不同的头可以学习不同的关注模式。
 
-多头的做法是：把 d_model 维拆成 h 份，每份是 d_model/h，然后**并行做 h 次注意力**。每个头在自己的子空间里学一种关系——有的头可能专门学相邻词关系，有的学远距离指代，有的学语法依存。最后拼起来。
+把维度均分时，参数量和计算量都和单头一样。不过这里有代价：每头维度变成 d/h，注意力矩阵的秩被限制在 d/h 以内，Bhojanapalli 等人 2020 年专门分析过这个低秩瓶颈。另外，Voita 和 Michel 在 2019 年都发现，训练好的模型可以剪掉大量的头而性能下降很小，说明多头之间有大量冗余。"
 
-关键是——**多头并不增加参数量和计算量**。因为每头维度变成 d/h，总维度还是 d，矩阵乘法的复杂度不变。所以多头是个'免费午餐'，凭白多了表达能力。
+### 📐 公式
 
-实证上，可视化注意力 pattern 确实能看到不同头学到了不同的模式。"
+$$\text{MultiHead}(X) = \text{Concat}(\text{head}_1, \ldots, \text{head}_h)W^O, \qquad \text{head}_i = \text{Attention}(XW_i^Q, XW_i^K, XW_i^V)$$
 
-### 📐 公式与维度分析
+$W_i^Q, W_i^K, W_i^V \in \mathbb{R}^{d_{model}\times d_k}$，$d_k = d_{model}/h$，$W^O \in \mathbb{R}^{d_{model}\times d_{model}}$。
 
-**单头**：
-$$\text{Attention}(Q, K, V) = \text{softmax}\left(\frac{QK^T}{\sqrt{d_k}}\right)V$$
-其中 $Q, K, V \in \mathbb{R}^{n \times d_{model}}$。
+🧮 参数量：Q/K/V 投影共 $3 \cdot h \cdot d_{model} \cdot d_k = 3d_{model}^2$，输出投影 $d_{model}^2$，与单头完全相同。
 
-**多头**：
-$$\text{MultiHead}(X) = \text{Concat}(\text{head}_1, ..., \text{head}_h) W^O$$
-$$\text{head}_i = \text{Attention}(XW_i^Q, XW_i^K, XW_i^V)$$
+### 📄 证据：多头到底学到了什么？
 
-其中 $W_i^Q, W_i^K, W_i^V \in \mathbb{R}^{d_{model} \times d_k}$，$d_k = d_{model}/h$。
+- **头的分工**：📄 Voita et al. 2019（*Analyzing Multi-Head Self-Attention: Specialized Heads Do the Heavy Lifting, the Rest Can Be Pruned*）在机器翻译模型中识别出几类重要的头：关注相邻位置的"位置头"、对应句法依存的"句法头"、关注低频词的头。用可微的剪枝方法去掉大部分头之后，BLEU 下降很小。
+- **冗余**：📄 Michel et al. 2019（*Are Sixteen Heads Really Better than One?*）发现，测试时很多层可以只保留一个头而性能基本不变；但训练时多头仍然有用。
+- **低秩瓶颈**：📄 Bhojanapalli et al. 2020（*Low-Rank Bottleneck in Multi-head Attention Models*）指出，当每头维度 $d_k < n$ 时，每个头的注意力矩阵表达能力受限；他们建议让 head 维度和序列长度相关，而不是固定为 $d_{model}/h$。
+- **机制可解释性**：📄 Olsson et al. 2022（Anthropic, *In-context Learning and Induction Heads*）发现了"归纳头"（induction head）：两层注意力配合实现"在前文中找到当前 token 上次出现的位置，复制它后面的 token"。他们提供证据表明，归纳头可能是 in-context learning 的重要机制之一。
 
-**参数量对比**（设 d_model = 512，h = 8）：
+### 🔥 高频追问
 
-| | 单头 | 多头 |
-|---|---|---|
-| Q/K/V 投影 | 3 × 512² = 786K | 8 × (3 × 512 × 64) = 786K ✓ 相同 |
-| 输出投影 | 512² = 262K | 512² = 262K ✓ 相同 |
+**Q：头数是不是越多越好？head 维度一般取多少？**
 
-**复杂度**：每头 O(n²·d/h)，h 头加起来还是 O(n²d)。
+A：不是。头数增加意味着每头维度减小，低秩瓶颈更严重。常见的 head 维度：
 
-### 💡 直觉理解
+| 模型 | head 维度 |
+|---|---|
+| GPT-2 | 64 |
+| GPT-3 175B（$d=12288$，96 头） | 128 |
+| LLaMA 系列 | 128 |
+| Gemma（7B）/ Gemma 2 部分尺寸 | 256 |
+| DeepSeek-V3（MLA） | Q/K 为 128 + 64（RoPE 部分），V 为 128 |
 
-可以类比成 CNN 的**多通道**：
-- 单头 Attention ≈ 单卷积核
-- 多头 Attention ≈ 多卷积核，每个卷积核学一种特征模式
+所以"大于 128 是浪费"并不成立。head 维度和头数是需要根据模型规模和推理开销（KV Cache 大小与头数成正比）来权衡的超参数。
 
-或者类比成**集成学习**：多个"弱的注意力"投票得到一个"强的表示"。
+**Q：MQA 只有一个 KV 头，是不是退化成了单头？**
 
-### 🔥 高频追问 Top 3
-
-**Q：多头是不是越多越好？**
-
-A：**不是**。头数太多每头维度太小，单头能力变弱；太少又失去多头的优势。**经验上 8、16、32 是常见值**，且 d_k 通常保持在 32-128 之间。最近也有研究表明，训练好的模型中**很多头是冗余的，可以剪掉**——比如 Voita 等人的 "Analyzing Multi-Head Self-Attention" 发现剪掉一半头性能不降。
-
-**Q：MQA 把 KV 头变成 1 个，那不就回到单头了吗？**
-
-A：**不一样**。MQA 仍然有多个 Q 头（h 个），只是它们共享同一组 K、V。所以 Q 还是能从 h 个不同子空间发起查询，只不过查的"内容"是同一个。这相当于"用 h 双不同的眼睛看同一本书"，损失了 K、V 的多样性，但保留了 Q 的多样性，所以效果只是略降。
-
-**Q：为什么每头维度通常是 32-128？**
-
-A：太小 (<32) 表达能力不够，QK 点积的"区分度"差；太大 (>128) 又会浪费——因为单头不需要那么强。32-128 是一个工程上的甜点。LLaMA 用 128，GPT-3（175B）用 128，DeepSeek 用 128；早期的 GPT-2 用 64。
+A：不是。MQA 仍然有 $h$ 个 query 头，每个头用自己的 query 在同一组 K、V 上产生**不同的注意力分布**。损失的是 K、V 表示的多样性，query 的多样性保留了。
 
 ### ⚠️ 常见陷阱
 
-1. **不要说"多头能学更多东西"——要说清楚是"不同子空间学不同模式"**
-2. **不要忘了说"参数量不变"——这是关键的工程优势**
-3. **可视化 attention map 是好的证据**，但要承认"可视化解释不完全可靠"，避免被反问
+1. 说清楚"不同子空间、不同位置"，并能给出 Voita / Olsson 的证据。
+2. 不要说"多头是免费的午餐"：有低秩瓶颈，也有冗余。
+3. 注意力可视化不等于解释：📄 Jain & Wallace 2019（*Attention is not Explanation*）和 Wiegreffe & Pinter 2019（*Attention is not not Explanation*）对此有过争论。
 
-### 🏢 大厂偏好
-
-- **字节 / 阿里**：经常追问"如果让你设计单头版的 LLM，怎么补回多头的能力？"——开放题，可以答 mixture of experts、动态路由
-- **OpenAI / Anthropic**：会从理论角度追问"多头的数学解释"
-
-### 📚 延伸阅读
-- [Analyzing Multi-Head Self-Attention](https://arxiv.org/abs/1905.09418) - 多头剪枝
-- [Are Sixteen Heads Really Better than One?](https://arxiv.org/abs/1905.10650) - 头数实验
+### 📚 出处
+- Voita et al. ACL 2019. arXiv:1905.09418
+- Michel et al. NeurIPS 2019. arXiv:1905.10650
+- Bhojanapalli et al. ICML 2020. arXiv:2002.07028
+- Olsson et al. *In-context Learning and Induction Heads*. Transformer Circuits Thread, 2022. arXiv:2209.11895
+- Jain & Wallace. NAACL 2019. arXiv:1902.10186；Wiegreffe & Pinter. EMNLP 2019. arXiv:1908.04626
 
 ---
 
@@ -539,106 +475,92 @@ A：太小 (<32) 表达能力不够，QK 点积的"区分度"差；太大 (>128)
 
 ### 🎯 一句话标答
 
-> 这条演化主线是**为了减小 KV Cache、加速推理**——MHA 每头独立 KV，MQA 所有头共享 1 组 KV，GQA 分组共享，MLA 把 KV 压缩到低维潜在空间。**核心权衡是质量 vs. 显存**。
+> 这条演化线的目标是**减小 KV Cache**，因为 decode 阶段每步都要读一遍 KV Cache，它决定了推理的带宽开销和可支持的并发量。MQA 让所有 query 头共享一组 KV；GQA 分组共享，是现在的主流；MLA（DeepSeek-V2）把 KV 压缩成一个低维潜在向量，推理时通过**权重吸收**直接在潜在空间中计算注意力。
 
 ### 🗣️ 30 秒口语版
 
-"这是个能讲出深度的好题。
+"MHA 每个头都有自己的 K、V，KV Cache 和头数成正比。
 
-**MHA** 是原始版本——h 个 Q 头对应 h 个 K 头、h 个 V 头，独立完整。问题是 KV Cache 太大了，长上下文场景下显存爆炸。
+MQA 是 Shazeer 2019 年提出的，所有 query 头共享一组 K、V，KV Cache 缩小为 1/h，但有一定的质量损失，训练也可能不稳定。PaLM 用了 MQA。
 
-**MQA** 是个激进方案——所有 Q 头共享 1 个 K 头、1 个 V 头。KV Cache 直接缩到 1/h，推理飞快。但代价是质量明显下降。代表模型 PaLM。
+GQA 是 2023 年 Google 的工作，把 query 头分成 g 组，每组共享一组 KV，是 MHA 和 MQA 之间的插值。论文还提出可以用大约 5% 的原始预训练计算量，把 MHA checkpoint 'uptrain' 成 GQA。LLaMA-2 70B 用 64 个 query 头配 8 个 KV 头，现在 GQA 基本是标配。
 
-**GQA** 是个折中——把 h 个 Q 头分成 g 组，每组共享 1 个 K/V 头。KV Cache 是 MHA 的 g/h，质量基本无损。LLaMA-2 70B 用 8 个 KV 头对 64 个 Q 头，是个甜点。**现在是事实标准**。
+MLA 是 DeepSeek-V2 提出的，思路不是减少头数，而是把每个 token 的 K、V 联合压缩成一个低维向量 c，只缓存 c。推理时把 K 的上投影矩阵吸收进 Q 的投影，把 V 的上投影吸收进输出投影，就可以直接在低维空间算注意力。难点是 RoPE 会破坏这种吸收，所以 DeepSeek 额外拆出一小段带 RoPE 的 key，所有头共享。DeepSeek-V2 报告说，和 DeepSeek 67B 相比，KV Cache 减少了 93.3%。"
 
-**MLA** 是 DeepSeek-V2 的创新——不是减少头数，而是把 KV 整个**压缩到一个低维潜在空间**，推理时再投影回来。KV Cache 减小 93%，质量还能保持。这是目前最优雅的方案。
+### 📐 KV Cache 对比
 
-整体演化逻辑是：从'砍数量'到'压维度'，越来越聪明。"
+设 $L=32$ 层、$n_h=32$ 个 query 头、$d_h=128$、序列长度 4096、FP16（2 字节）。每个 token 每层缓存的元素数和总量：
 
-### 📐 详细对比
+| 方法 | 每 token 每层缓存元素数 | 4096 token 总量 | 相对 MHA |
+|---|---|---|---|
+| MHA | $2 n_h d_h = 8192$ | 2 GiB | 100% |
+| GQA（$g=8$） | $2 g d_h = 2048$ | 512 MiB | 25% |
+| MQA | $2 d_h = 256$ | 64 MiB | 3.1% |
+| MLA（DeepSeek-V2 维度） | $d_c + d_h^R = 512 + 64 = 576$ | 144 MiB | 7.0% |
 
-```
-                 ┌─────────────────────────────────────────┐
-                 │              Q 头数 = h (都一样)          │
-                 └─────────────────────────────────────────┘
+🧮 计算方法：总字节数 = 元素数 × 2 字节 × 层数 × token 数。例如 MHA：$8192 \times 2 \times 32 \times 4096 = 2^{31}$ 字节 = 2 GiB。
 
-MHA:   Q₁ Q₂ ... Q_h     K₁ K₂ ... K_h     V₁ V₂ ... V_h
-       │  │       │       │  │       │       │  │       │
-       └──┴───────┘       └──┴───────┘       └──┴───────┘
-       (h 头)             (h 头独立)         (h 头独立)
+> 注：MLA 这一行把 DeepSeek-V2 的 $d_c=512$、$d_h^R=64$ 套到了这个假想模型上，只用于比较量级。📄 DeepSeek-V2 报告中"减少 93.3%"是**相对于 DeepSeek 67B** 的比较。
 
+### 🧮 MLA 推导（重点）
 
-MQA:   Q₁ Q₂ ... Q_h     K (单一)           V (单一)
-       │  │       │       │                  │
-       └──┴───────┘       └─ 所有 Q 共享 ──┘  └─ 所有 Q 共享 ──┘
+📄 DeepSeek-V2 的 MLA（省略 query 侧的压缩）：
 
+$$c_t^{KV} = W^{DKV} h_t \in \mathbb{R}^{d_c}, \qquad k_t^{C} = W^{UK} c_t^{KV}, \qquad v_t^{C} = W^{UV} c_t^{KV}$$
 
-GQA:   Q₁ Q₂ ... Q_h     K₁ K₂ ... K_g      V₁ V₂ ... V_g
-       │  │       │       │                   │
-       └──┘   ... 每组 Q 共享一组 KV (g < h)
+推理时只缓存 $c_t^{KV}$。
 
+**权重吸收**：对第 $i$ 个头，
+$$q_{t,i}^T k_{s,i}^{C} = (W_i^{Q} h_t)^T (W_i^{UK} c_s^{KV}) = h_t^T \underbrace{(W_i^{Q})^T W_i^{UK}}_{\text{可预先合并}} c_s^{KV}$$
+所以 query 可以直接投影到 $d_c$ 维的潜在空间，与缓存的 $c_s^{KV}$ 做点积，**不需要还原出完整的 K**。同理，$W^{UV}$ 可以吸收进输出投影 $W^O$。
 
-MLA:   Q₁ Q₂ ... Q_h     ┌─────────┐         ┌─────────┐
-       │  │       │       │ 低维 c_t │ ←压缩─→│ 低维 c_t │
-       └──┴───────┘       └─────────┘         └─────────┘
-                          推理时 c_t 再投影回 K、V
-```
+**RoPE 带来的问题**：RoPE 在 $q$ 和 $k$ 上分别乘以和位置有关的旋转矩阵 $R_t, R_s$：
+$$q_t^T R_t^T R_s k_s = h_t^T (W^Q)^T R_{s-t}\, W^{UK} c_s$$
+$R_{s-t}$ 夹在 $W^Q$ 和 $W^{UK}$ 中间，并且随相对位置变化，所以两个矩阵**无法预先合并**。
 
-**详细参数表**（假设 h=32, d_head=128, L=32 层, s=4096 序列, FP16）：
+**解耦 RoPE（Decoupled RoPE）**：额外引入一小段专门承载位置信息的向量：
+- 每个头有一个 RoPE query $q_{t,i}^R$；
+- 所有头**共享**一个 RoPE key $k_t^R = \text{RoPE}(W^{KR} h_t) \in \mathbb{R}^{d_h^R}$，它和 $c_t^{KV}$ 一起缓存；
+- 最终分数是"内容部分"（经过吸收的低秩点积）和"位置部分"（RoPE 点积）之和。
 
-| 方法 | KV 头数 | 单 token KV 维度 | KV Cache 总量 | 相对 MHA |
-|---|---|---|---|---|
-| MHA | 32 | 2 × 32 × 128 = 8192 | 2.0 GB | 100% |
-| MQA | 1 | 2 × 1 × 128 = 256 | 64 MB | 3.1% |
-| GQA (g=8) | 8 | 2 × 8 × 128 = 2048 | 512 MB | 25% |
-| MLA | - | ~576（DeepSeek-V2） | ~140 MB | ~7% |
+详细讨论见第 2 章 Q8。
 
-### 🔍 MLA 深度展开（DeepSeek 核心创新，重点）
+📄 **MLA 的效果**：DeepSeek-V2 报告的消融实验显示，MLA 的效果**优于** MHA，同时 KV Cache 远小于 MHA。
 
-MLA 不属于"减少头数"思路，是另起炉灶。核心思想是**低秩压缩**：
+> 💡 这也解释了第 3 章 Q8 的问题：QK-Norm 需要对完整的 $k$ 做逐头归一化，这会破坏权重吸收，所以 MLA 不能直接使用 QK-Norm。
 
-```
-传统 KV：每个 token 存 K_t = X_t · W_K  和  V_t = X_t · W_V
+### 🔥 高频追问
 
-MLA：每个 token 只存压缩向量 c_t = X_t · W_DKV  (低维, ~512)
-     需要时再用 W_UK, W_UV 投影回 K、V
-```
+**Q：为什么 GQA 的质量损失比 MQA 小？**
 
-**KV Cache 公式**：
-- MHA：2 × n_h × d_head 维
-- MLA：d_c 维（约 4~5 倍 d_head，但不乘 n_h）
+A：📄 Ainslie et al. 2023 报告，GQA 的质量接近 MHA，速度接近 MQA。💭 直观上，$g$ 组 KV 的表示容量是 MQA 的 $g$ 倍，不同组的 query 可以匹配不同的 K、V 子空间。
 
-**额外加 RoPE 时的小麻烦**：因为 MLA 的 K 是动态投影出来的，没法直接乘 RoPE 矩阵。DeepSeek 的解法是把 K 拆成两部分——一部分参与压缩（c_t），另一部分独立加 RoPE，最后拼接。
+**Q：MLA 为什么能在压缩的同时保持质量？**
 
-### 🔥 高频追问 Top 3
+A：💭 MLA 不是简单地减少 KV 的维度，而是**缓存一个共享的低维潜在向量，再为每个头单独上投影**。上投影后每个头的 K、V 仍然不同，所以它比 GQA 更灵活。📄 TransMLA（Meng et al. 2025）从理论上论证：在 KV Cache 大小相同时，GQA 都可以表示成 MLA，反之则不成立，所以 MLA 的表达能力更强；他们还提出了把 GQA 模型转换成 MLA 的方法。
 
-**Q：MQA 质量下降为什么 GQA 不下降？**
+**Q：除了 MLA，还有哪些减小 KV Cache 的方向？**
 
-A：因为 GQA 仍然保留了多组 KV，每组负责一部分 Q 头，**信息容量**比 MQA 大得多。MQA 是 32 个 Q 头共用 1 组 KV，相当于让 1 组 KV"伺候"32 种不同的查询，太挤了；GQA 是 4 个 Q 头一组共用，压力小得多。
-
-**Q：MLA 为什么能保持质量？**
-
-A：因为 MLA 不是在"剪枝"，而是在"重新参数化"。它假设 KV 在低维潜在空间里就有足够的表达力——这个假设通过实验验证是成立的。可以类比 LoRA——不是直接减少参数，而是用低秩分解表达高维变换。
-
-**Q：能不能比 MLA 更优？**
-
-A：理论上可以继续探索。最近有些方向：① 进一步压缩 d_c；② 在 KV Cache 上做量化（INT8、INT4），可以叠加；③ 跨层共享 KV，DeepSeek 在某些版本中尝试过。但 MLA + KV 量化已经接近物理极限。
+A：
+- **跨层共享 KV**：📄 Cross-Layer Attention（Brandon et al. 2024）让相邻层共享 KV；📄 YOCO（Sun et al. 2024）只缓存一次全局 KV。
+- **KV Cache 量化**：INT8 / INT4 / FP8（→ 第 13 章）。
+- **KV 淘汰与压缩**：H2O、StreamingLLM 的 attention sink、SnapKV 等（→ 第 12 章）。
+- **滑动窗口 / 局部注意力**：部分层只缓存最近的 token（Mistral、Gemma 2/3）。
+- **混合架构**：大部分层用固定大小状态的线性注意力，只有少数层用完整注意力（Q10）。
 
 ### ⚠️ 常见陷阱
 
-1. **不要把 MQA 和 GQA 混淆**——MQA 是 g=1 的极端版 GQA
-2. **不要忘了 MLA 的 RoPE 兼容性问题**——这是面试官追问的高频点
-3. **不要只讲原理不讲数字**——KV Cache 节省多少、相对 MHA 多少，要能信手拈来
+1. MQA 是 $g=1$ 的 GQA，MHA 是 $g=h$ 的 GQA。
+2. 讲 MLA 必须讲清**权重吸收**和**RoPE 为什么会破坏吸收**，只说"压缩到低维"是不够的。
+3. "减少 93.3%"是相对 DeepSeek 67B 的数字，不是相对任意 MHA 模型。
 
-### 🏢 大厂偏好
-
-- **字节 / DeepSeek 出身的面试官**：必问 MLA，会要求画图
-- **AI Infra 岗**：追问 KV Cache 具体计算和量化方案
-
-### 📚 延伸阅读
-- [MQA Paper](https://arxiv.org/abs/1911.02150)
-- [GQA Paper](https://arxiv.org/abs/2305.13245)
-- [DeepSeek-V2 Paper](https://arxiv.org/abs/2405.04434) - MLA 详细介绍
+### 📚 出处
+- Shazeer. *Fast Transformer Decoding: One Write-Head is All You Need*（MQA）. 2019. arXiv:1911.02150
+- Ainslie et al. *GQA*. EMNLP 2023. arXiv:2305.13245
+- DeepSeek-AI. *DeepSeek-V2*. 2024. arXiv:2405.04434
+- Meng et al. *TransMLA: Multi-Head Latent Attention Is All You Need*. 2025. arXiv:2502.07864
+- Brandon et al. *Reducing Transformer Key-Value Cache Size with Cross-Layer Attention*. 2024. arXiv:2405.12981
+- Sun et al. *You Only Cache Once*（YOCO）. 2024. arXiv:2405.05254
 
 ---
 
@@ -646,80 +568,61 @@ A：理论上可以继续探索。最近有些方向：① 进一步压缩 d_c�
 
 ### 🎯 一句话标答
 
-> Causal Mask 是个**上三角矩阵**，在 softmax 之前把"未来位置"的注意力分数设为 -∞，保证 Decoder 在训练时不会"偷看"后面的 token。
+> Causal mask 在 softmax 之前把位置 $i$ 对所有 $j > i$ 的 logit 设为 $-\infty$，即**只允许关注下三角（含对角线）**。它让一次前向就能并行计算所有位置的下一个 token 预测（teacher forcing），同时保证每个位置看不到未来，训练和自回归推理的条件一致。
 
-### 🗣️ 30 秒口语版
+### 📐 示例（n=4）
 
-"Decoder-Only 的 LLM 是自回归生成的——预测第 t 个 token 时，只能看 1 到 t-1。但如果训练时不加约束，Self-Attention 会让每个 token 都看到序列里所有 token，包括未来的——这就是'信息泄露'，模型会作弊，推理时就崩了。
-
-Causal Mask 就是干这件事的。它是个**上三角矩阵**，在注意力分数矩阵的'未来'位置上加一个 -∞，让 softmax 之后这些位置的权重变成 0。这样每个 token 真的就只能看到自己和前面的 token。
-
-实现上很简单，PyTorch 一行 `torch.tril(torch.ones(n, n))` 就能造出来，然后用 `masked_fill(mask == 0, -inf)` 应用。"
-
-### 📐 矩阵示例（n=4）
-
-不加 mask 的注意力分数矩阵（每行是一个 token 对所有 token 的注意力）：
 ```
-       t1   t2   t3   t4
-  t1 [s11  s12  s13  s14]    ← t1 不应该看到 t2,t3,t4
-  t2 [s21  s22  s23  s24]    ← t2 不应该看到 t3,t4
-  t3 [s31  s32  s33  s34]    ← t3 不应该看到 t4
-  t4 [s41  s42  s43  s44]
+加 mask 后的 logit（行 = query，列 = key）：
+       t1    t2    t3    t4
+  t1 [s11   -∞    -∞    -∞ ]
+  t2 [s21   s22   -∞    -∞ ]
+  t3 [s31   s32   s33   -∞ ]
+  t4 [s41   s42   s43   s44]
 ```
 
-加 Causal Mask 后：
-```
-       t1   t2   t3   t4
-  t1 [s11  -∞   -∞   -∞ ]
-  t2 [s21  s22  -∞   -∞ ]
-  t3 [s31  s32  s33  -∞ ]
-  t4 [s41  s42  s43  s44]
-```
+softmax 后，$-\infty$ 的位置权重为 0。
 
-经过 softmax 后，-∞ 位置变成 0，每个 token 只对自己和前面的 token 有非零注意力。
-
-### 💻 PyTorch 实现
+### 💻 实现
 
 ```python
-import torch
+n = scores.size(-1)
+allowed = torch.ones(n, n, dtype=torch.bool, device=scores.device).tril()
+scores = scores.masked_fill(~allowed, float("-inf"))
+attn = scores.softmax(dim=-1)
 
-def causal_mask(seq_len):
-    """生成下三角形 mask，True 表示允许，False 表示屏蔽"""
-    return torch.tril(torch.ones(seq_len, seq_len)).bool()
-
-# 应用 mask
-scores = Q @ K.transpose(-2, -1) / math.sqrt(d_k)  # (n, n)
-mask = causal_mask(scores.size(-1))                  # (n, n)
-scores = scores.masked_fill(~mask, float('-inf'))    # 屏蔽未来位置
-attn = F.softmax(scores, dim=-1)
+# 实际工程：直接用 is_causal，让 kernel 自己处理
+out = F.scaled_dot_product_attention(q, k, v, is_causal=True)
 ```
 
-### 🔥 高频追问 Top 3
+### 🔥 高频追问
 
-**Q：训练时加 Causal Mask，那训练效率怎么样？**
+**Q：训练时一半的注意力矩阵都被 mask 掉了，是不是浪费？**
 
-A：表面上看，n×n 矩阵里有一半（上三角）是没用的，是浪费。但实际上**仍然是高效的**——因为 GPU 矩阵乘法不擅长跳过特定位置，**整体算完再 mask 掉，比稀疏计算更快**。这就是为什么 Transformer 训练能并行——所有 token 的预测可以一次性算出来，每个位置的 loss 都是有效梯度信号。
+A：朴素实现会先算完整个矩阵再 mask，确实浪费约一半。📄 但 FlashAttention 等分块 kernel 会**直接跳过完全位于上三角的块**，所以 causal attention 的实际计算量约为非 causal 的一半。
 
-**Q：推理时还需要 Causal Mask 吗？**
+**Q：推理时还需要 causal mask 吗？**
 
-A：**严格来说不需要**。因为推理是自回归的，每一步只算一个新 token 对所有历史的注意力——本来就只有"过去"，没有"未来"，物理上不存在泄露。所以推理时的 Q 只有一行（当前 token），KV 是所有历史，KV Cache 直接拼上去即可，不需要 mask。
+A：要分阶段：
+- **Decode 阶段**（每次只算一个新 token）：新 token 的 query 本来就只能看到已缓存的历史，不需要 mask。
+- **Prefill 阶段**（一次性处理整个 prompt）：和训练一样，**需要** causal mask。
+- **投机解码的验证、chunked prefill、多序列打包**：一次处理多个新 token，需要 causal mask，打包时还需要防止不同序列互相关注的块对角 mask（→ 第 14、15 章）。
 
-**Q：Cross-Attention 也需要 mask 吗？**
+> ❌ 旧版说"推理时严格来说不需要 mask"，只对 decode 阶段成立。
 
-A：**通常不需要**。Cross-Attention 是 Decoder 看 Encoder 的输出，而 Encoder 是双向的，输出包含完整序列信息。Decoder 在生成时看完整 Encoder 是合理的。除非有特殊场景（比如流式翻译，Encoder 也是边生成边喂），才需要给 Cross-Attention 也加 mask。
+**Q：padding mask 和 causal mask 怎么配合？会有什么坑？**
+
+A：两者取逻辑与。一个常见的坑：如果某一行**所有位置都被 mask**（例如左 padding 时 padding 位置自己作为 query），softmax 的分母为 0，会产生 NaN。常见的处理方式：用一个很大的负数代替 $-\infty$，或者确保每个 query 至少能看到自己。
+
+**Q：序列打包（packing）训练时 mask 怎么处理？**
+
+A：把多条短样本拼成一条长序列以减少 padding 时，如果只用普通的 causal mask，后面的样本会关注到前面不相关的样本。严格的做法是使用**块对角的 causal mask**（每个样本内部是 causal 的，样本之间完全屏蔽），FlashAttention 的变长接口（`cu_seqlens`）支持这种方式；位置编码也要在每个样本处重新从 0 开始。是否严格隔离对效果的影响，不同工作的结论并不一致。
 
 ### ⚠️ 常见陷阱
 
-1. **混淆 padding mask 和 causal mask**：padding mask 是屏蔽 padding token（不让它们参与/被关注），causal mask 是屏蔽未来。**两者要一起用**，通常用按位与组合。
-2. **mask 加错位置**：必须在 softmax **之前**，加在 logits 上，不能加在概率上。
-3. **训练用 mask，推理不用 mask** 这个区分要清楚。
-
-### 🏢 大厂偏好
-
-- 这是个**实现题**，更多在手撕代码环节考察。常见错误是把 mask 加在 softmax 后面，被面试官现场捉包。
-
-### 📚 延伸阅读
-- 见第 9 章手撕代码
+1. mask 加在 logit 上，不是加在概率上。
+2. 推理分 prefill 和 decode 两个阶段，不能一概而论。
+3. 全屏蔽的行会产生 NaN。
 
 ---
 
@@ -727,88 +630,112 @@ A：**通常不需要**。Cross-Attention 是 Decoder 看 Encoder 的输出，�
 
 ### 🎯 一句话标答
 
-> Encoder-Only 适合**理解类任务（分类、检索）**；Decoder-Only 适合**生成与对话**；Encoder-Decoder 适合**输入输出强对齐的任务（翻译、摘要）**。
+> Encoder-Only（双向）适合只需要理解的任务，如分类、序列标注和轻量检索；Decoder-Only（因果）适合通用生成和对话，是当前 LLM 的主流；Encoder-Decoder 适合"读入一段输入、生成一段输出"且两者差异较大的任务，如翻译、语音识别和摘要。三者之间的界限正在变得模糊：decoder LLM 也能做 embedding，decoder 也能改造成 encoder-decoder。
 
-### 🗣️ 30 秒口语版
-
-"我从两个维度来回答——结构和任务的匹配度。
-
-**Encoder-Only**——BERT 这类，注意力是**双向**的，能同时看左右上下文，所以理解能力强。适合分类、命名实体识别、稠密检索这种'看懂就行，不用生成'的任务。
-
-**Decoder-Only**——GPT/LLaMA 这类，注意力是**单向的因果**，天然是生成式的。适合对话、续写、代码生成、agent 这种需要逐 token 输出的场景。现在 LLM 几乎全是这一派。
-
-**Encoder-Decoder**——T5/BART/Whisper 这类，**两边解耦**，Encoder 充分理解输入，Decoder 自由生成输出。适合输入输出明显是两个不同空间的任务，比如翻译（中文到英文）、语音识别（音频到文字）、摘要（长文到短文）。
-
-简单记忆口诀：**只读 → Encoder，只写 → Decoder，读完再写 → Encoder-Decoder**。"
-
-### 📐 详细对比
+### 📐 对比
 
 | 维度 | Encoder-Only | Decoder-Only | Encoder-Decoder |
 |---|---|---|---|
-| 注意力方向 | 双向 | 单向因果 | Enc 双向 + Dec 单向 |
-| 训练目标 | MLM (15% mask) | CLM (全量 token) | Span Corruption / Seq2Seq |
-| 数据利用率 | 低（15%） | 高（100%） | 中 |
-| In-Context Learning | 弱 | 强 | 中 |
-| 代表模型 | BERT, RoBERTa, BGE | GPT, LLaMA, DeepSeek | T5, BART, Whisper |
-| 适合任务 | 分类、NER、Embedding | 生成、对话、Agent | 翻译、摘要、ASR |
-| 当前地位 | 仍是 Embedding 主流 | 通用 LLM 主流 | 多模态/对齐场景 |
+| 注意力 | 双向 | 因果 | Encoder 双向 + Decoder 因果 + cross-attn |
+| 典型目标 | MLM | 下一个 token 预测 | Span corruption（T5）/ 去噪（BART）/ UL2 混合 |
+| 代表模型 | BERT、RoBERTa、ModernBERT | GPT、LLaMA、Qwen、DeepSeek | T5、BART、Whisper、T5Gemma |
+| 典型用途 | 分类、NER、重排序 | 生成、对话、Agent、Embedding（新趋势） | 翻译、ASR、摘要 |
 
-### 🔥 高频追问 Top 3
+还有一个中间形态：**Prefix LM**（非因果 decoder），对输入前缀用双向注意力，对输出部分用因果注意力。📄 UL2（Tay et al. 2022）把多种去噪目标统一起来，同时支持这几种模式。
 
-**Q：为什么 Embedding 模型大多还是 Encoder？**
+### 🔥 高频追问
 
-A：因为 Embedding 需要**对整句的双向理解**。一个句子的语义不是"从左到右逐渐累积"出来的，而是整句协同的产物。Encoder 的双向注意力天然适合这个——CLS token 或 mean pooling 能融合全局信息。Decoder-Only 也能做 Embedding，但需要技巧（比如 SGPT、LLM2Vec），且通常不如同等规模的 Encoder。
+**Q：多模态模型是 Encoder-Decoder 吗？**
 
-**Q：未来 Encoder-Decoder 还会复兴吗？**
+A：要区分：
+- 📄 **Flamingo**（Alayrac et al. 2022）：在冻结的 decoder LM 中插入 gated cross-attention 层去读取视觉特征，形式上接近 encoder-decoder。
+- 📄 **LLaVA**（Liu et al. 2023）、Qwen-VL 等目前主流的 VLM：视觉编码器（如 ViT）的输出经过投影层，**作为 token 直接拼接到 decoder-only LLM 的输入序列中**，没有 cross-attention。这不是经典的 Encoder-Decoder，而是"视觉编码器 + Decoder-Only"。
+- **Whisper**：标准的 Encoder-Decoder。
 
-A：在**多模态**领域已经在复兴了。比如 Flamingo、BLIP、Whisper——视觉编码、音频编码这种"异构输入"，用 Encoder 处理更优雅，输出再交给 Decoder 生成文本。所以"纯文本场景 Decoder-Only 赢"和"多模态场景 Encoder-Decoder 仍有空间"并不矛盾。
+所以"多模态让 Encoder-Decoder 复兴"不准确，更准确的说法是"多模态普遍需要模态编码器，但和语言模型的连接方式有多种"。
 
-**Q：如果让你做一个翻译系统，你选哪种？**
+**Q：如果让你做一个翻译系统，选哪种？**
 
-A：要看场景——
-- 通用聊天里的翻译能力：直接用 Decoder-Only 大模型（GPT-4），效果好且省事
-- 专用翻译产品（如 DeepL）：Encoder-Decoder（基于 mBART/NLLB）仍是更优解，因为输入输出对齐更好，质量更可控
-- 多模态翻译（图片翻译、语音翻译）：必然是 Encoder-Decoder
+A：取决于约束：
+- 需要覆盖大量语言、追求通用质量：通用的 decoder-only LLM 往往已经很强，还能顺便处理术语、风格等指令。
+- 对延迟和成本敏感、语言对固定：专用的较小 Encoder-Decoder 模型（例如 📄 Meta 的 NLLB-200, 2022）性价比更高。
+- 语音翻译：一般是语音 encoder + 文本 decoder。
 
-### ⚠️ 常见陷阱
+> ❌ 旧版说"DeepL 基于 mBART/NLLB"没有出处，已删除。
 
-1. **不要绝对化**——Decoder-Only 也能做分类、Encoder 也能做生成，只是各有优劣
-2. **不要忘记 Encoder 在多模态中的复兴**——这是个加分点
+### 📚 出处
+- Tay et al. *UL2: Unifying Language Learning Paradigms*. ICLR 2023. arXiv:2205.05131
+- Alayrac et al. *Flamingo*. NeurIPS 2022. arXiv:2204.14198
+- Liu et al. *Visual Instruction Tuning*（LLaVA）. NeurIPS 2023. arXiv:2304.08485
+- Radford et al. *Robust Speech Recognition via Large-Scale Weak Supervision*（Whisper）. 2022. arXiv:2212.04356
+- NLLB Team. *No Language Left Behind*. 2022. arXiv:2207.04672
 
-### 🏢 大厂偏好
+---
 
-- **业务岗**（推荐、搜索）：会追问"我们的场景该选哪种架构"，要结合具体任务回答
-- **算法岗**：会从训练范式角度追问数据利用率
+## Q10：研究前沿：Attention 之后是什么？ ⭐⭐⭐⭐⭐
 
-### 📚 延伸阅读
-- [What Language Model Architecture and Pretraining Objective Work Best for Zero-Shot Generalization?](https://arxiv.org/abs/2204.05832)
+> 不是面试必答题。目的是帮你看清"哪些问题还没有解决"。
+
+### 方向 1：线性复杂度的序列模型与混合架构
+
+- 📄 **Mamba**（Gu & Dao 2023）：选择性状态空间模型，参数随输入变化，训练时可并行扫描，推理时状态大小固定。📄 **Mamba-2**（Dao & Gu 2024）提出"状态空间对偶"（SSD），说明 SSM 和一类线性注意力在数学上是等价的。
+- 📄 **门控线性注意力与 Delta 规则**：GLA（Yang et al. 2023）、DeltaNet（Yang et al. 2024）、Gated DeltaNet（Yang, Kautz, Hatamizadeh, ICLR 2025）。Delta 规则把状态更新看成在线学习一个键值映射，"先删除旧值再写入新值"，改善了线性注意力的检索能力。
+- **工业界的混合架构**（大部分层用线性注意力，少数层保留完整注意力）：📄 MiniMax-01 的 Lightning Attention（2025）、Qwen3-Next（Gated DeltaNet + gated attention 混合）、Kimi Linear 等。
+- ❓ **开放问题**：线性/状态空间模型在**精确检索和复制**类任务上有理论上的劣势（固定大小的状态容量有限，📄 参见 Jelassi et al. 2024, *Repeat After Me: Transformers are Better than State Space Models at Copying*）。混合比例应该如何设计？哪些层应该保留完整注意力？
+
+### 方向 2：注意力本身的改进
+
+- 📄 **Differential Transformer**（Ye et al. 2024, Microsoft）：用两个 softmax 注意力图的差来消除"注意力噪声"。
+- 📄 **Gated Attention**（Qwen 团队 2025）：在注意力输出后加一个与输入相关的 sigmoid 门，报告可以缓解 attention sink 并提升训练稳定性（Qwen3-Next 采用）。
+- 📄 **Attention sink**（Xiao et al. 2023, StreamingLLM）：很多头会把大量注意力分配给第一个 token。这是 softmax"权重必须和为 1"带来的副作用，还是模型有意学出的功能？这个问题仍在讨论中（另见第 3 章 Q9）。
+
+### 方向 3：机制可解释性
+
+- 📄 Anthropic 的 *A Mathematical Framework for Transformer Circuits*（Elhage et al. 2021）把 Transformer 分解为对残差流的读写操作，从电路的角度分析注意力头的组合方式（如 QK 电路、OV 电路），归纳头就是在这个框架下发现的。
+- ❓ **开放问题**：这些在小模型上发现的电路，在大模型中是否以同样的形式存在？
+
+### 🧪 动手验证思路
+
+1. 实现一个带 causal mask 的多头注意力，和 `F.scaled_dot_product_attention` 的输出对比，误差应在 1e-5 以内。
+2. 在一个 2 层的 attention-only 小模型上训练重复序列任务，观察是否出现归纳头（参照 Olsson et al. 2022）。
+3. 实现 MLA 的权重吸收：分别用"还原完整 K"和"在潜在空间计算"两种方式算注意力分数，验证两者数值一致；再加入 RoPE，观察吸收为什么不再成立。
+
+### 📚 出处
+- Gu & Dao. *Mamba*. 2023. arXiv:2312.00752；Dao & Gu. *Transformers are SSMs*（Mamba-2）. ICML 2024. arXiv:2405.21060
+- Yang et al. *Gated Linear Attention Transformers*. ICML 2024. arXiv:2312.06635
+- Yang et al. *Gated Delta Networks*. ICLR 2025. arXiv:2412.06464
+- MiniMax. *MiniMax-01*. 2025. arXiv:2501.08313
+- Jelassi et al. *Repeat After Me*. ICML 2024. arXiv:2402.01032
+- Ye et al. *Differential Transformer*. ICLR 2025. arXiv:2410.05258
+- Qiu et al.（Qwen）. *Gated Attention for Large Language Models*. 2025. arXiv:2505.06708
+- Xiao et al. *Efficient Streaming Language Models with Attention Sinks*. ICLR 2024. arXiv:2309.17453
+- Elhage et al. *A Mathematical Framework for Transformer Circuits*. Transformer Circuits Thread, 2021
 
 ---
 
 ## 📝 本章小结
 
-| 关键点 | 你必须能脱口而出 |
-|---|---|
-| Transformer 架构 | Encoder-Decoder × N，每层 = Attn + FFN + Res + Norm |
-| Decoder-Only 胜出原因 | 任务统一 / Scaling 友好 / 推理高效 / 数据利用率 |
-| Self-Attention 公式 | softmax(QKᵀ/√d_k)·V，按行 softmax |
-| 除 √d_k 原因 | QKᵀ 方差为 d_k，不缩放 softmax 会饱和 |
-| Self-Attention 复杂度 | 时间 O(n²d)，空间 O(n²) |
-| Multi-Head 作用 | 不同子空间学不同模式，参数量不变 |
-| MHA→MLA 演化 | 减头数 → 减组数 → 压维度 |
-| Causal Mask | 上三角 -∞，加在 softmax 前 |
-| 三类架构选型 | 只读 Enc / 只写 Dec / 读完写 Enc-Dec |
+| 关键点 | 你必须能脱口而出 | 性质 |
+|---|---|---|
+| 架构 | 原始：Enc-Dec + Post-Norm；现代：Decoder-Only + Pre-Norm + RMSNorm + SwiGLU + RoPE + GQA | 📄 |
+| 参数量 | 每层约 $12d^2$（attn $4d^2$ + FFN $8d^2$） | 🧮 |
+| Decoder-Only | 纯无监督预训练后零样本最好（Wang 2022），但依赖训练流程 | 📄 |
+| Attention 公式 | $\text{softmax}(QK^T/\sqrt{d_k})V$，按行 softmax | 🧮 |
+| √d_k | 独立假设下方差为 $d_k$；原论文说"suspect"；μP 用 $1/d$ | 🧮 + 📄 |
+| 复杂度 | $8nd^2 + 4n^2d$；FlashAttention 不减 FLOPs，减显存读写 | 🧮 + 📄 |
+| 多头 | 不同子空间/位置；有低秩瓶颈和冗余；归纳头 | 📄 |
+| GQA / MLA | GQA 分组共享 KV；MLA 缓存低维 latent + 权重吸收 + 解耦 RoPE | 🧮 + 📄 |
+| Causal mask | 下三角允许；prefill 需要、decode 不需要；全屏蔽行会 NaN | 🧮 |
 
 ## ✅ 自测题
 
-回答这 5 个问题，如果能流畅讲清楚，本章过关：
-
-1. 当面试官问"什么是 Self-Attention"，你能在 30 秒内说清直觉 + 公式 + 一个细节吗？
-2. 为什么 √d_k 而不是别的数？现场推导一遍。
-3. 画图说清楚 MHA、MQA、GQA、MLA 的区别，并说出各自的 KV Cache 大小。
-4. 用 50 行 Python 实现一个带 Causal Mask 的 Self-Attention（不查文档）。
-5. 如果面试官问"如果让你改进 Transformer"，你能给出 3 个有理有据的方向吗？
+1. 写出原始 Transformer 和 LLaMA 的单层结构，并指出 5 处不同。
+2. 用 $12Ld^2$ 估算 LLaMA-2 7B（$L=32, d=4096$）的非嵌入参数量，并解释和 7B 的差距来自哪里（提示：SwiGLU 的 $d_{ff}=11008$、词表嵌入）。
+3. 推导 $\text{Var}(q\cdot k)=d_k$，并说明在什么情况下这个结论不成立。
+4. 写出 MLA 的权重吸收公式，并说明 RoPE 为什么会破坏吸收。
+5. Wang et al. 2022 的对照实验得出了什么结论？它对"为什么 LLM 是 Decoder-Only"的回答有什么影响？
+6. 实现一个支持 padding mask + causal mask 的多头注意力，并处理全屏蔽行的 NaN 问题。
 
 ---
 
-> **下一章预告**：第 2 章｜位置编码专题——从 Sinusoidal 讲到 RoPE，再到长文本外推的 NTK / YaRN。位置编码是字节面试的另一个高频区，DeepSeek-V3 的 MLA 涉及 RoPE 的特殊处理也会在那里详谈。
+> **下一章预告**：第 2 章｜位置编码专题——从 Sinusoidal 到 RoPE，再到长上下文外推的 PI / NTK / YaRN，以及 MLA 中解耦 RoPE 的完整推导。
