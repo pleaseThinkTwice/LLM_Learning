@@ -4,19 +4,21 @@
 
 > **配套章节**：KV Cache 的**架构侧**（MHA→MQA→GQA→MLA）→ 第 1 章 / 长上下文外推（PI/NTK/YaRN）→ 第 2 章 / 量化 → 第 13 章 / 投机解码 → 第 14 章 / 推理引擎选型与服务化指标 → 第 15 章
 
+> **标记约定**（见 README）：📄 论文结论 / 🧮 可推导 / 💭 直觉或经验 / ❓ 开放问题。本章中的时间、吞吐数字大多是用 Roofline 公式推算的**理论上界估算**（🧮），实际值会因 kernel 效率、调度开销而更低。
+
 ---
 
 ## 📌 本章导航
 
-| 序号 | 题目 | 难度 | 频率（字节/阿里/Meta/DeepSeek） | 类型 |
-|---|---|---|---|---|
-| Q1 | **Prefill vs Decode：两阶段的本质区别** | ⭐⭐⭐⭐⭐ | **9 / 7 / 6 / 6** | 必问 |
-| Q2 | **KV Cache 原理与显存估算** | ⭐⭐⭐⭐⭐ | **9 / 8 / 6 / 7** | 必问·可能手撕 |
-| Q3 | **Decode 为什么是 Memory-Bound（Roofline）** | ⭐⭐⭐⭐⭐ | **8 / 5 / 6 / 6** | 必问 |
-| Q4 | **PagedAttention 与显存碎片** | ⭐⭐⭐⭐⭐ | **9 / 7 / 5 / 5** | 必问 |
-| Q5 | **Continuous Batching** | ⭐⭐⭐⭐⭐ | **8 / 7 / 5 / 4** | 必问 |
-| Q6 | Chunked Prefill 与 Decode 卡顿 | ⭐⭐⭐⭐ | 6 / 4 / 3 / 4 | 进阶 |
-| Q7 | Prefix Caching / RadixAttention | ⭐⭐⭐⭐ | 6 / 5 / 3 / 3 | 应用 |
+| 序号 | 题目 | 难度 | 类型 |
+|---|---|---|---|
+| Q1 | **Prefill vs Decode：两阶段的本质区别** | ⭐⭐⭐⭐⭐ | 必问 |
+| Q2 | **KV Cache 原理与显存估算** | ⭐⭐⭐⭐⭐ | 必问·可能手撕 |
+| Q3 | **Decode 为什么是 Memory-Bound（Roofline）** | ⭐⭐⭐⭐⭐ | 必问 |
+| Q4 | **PagedAttention 与显存碎片** | ⭐⭐⭐⭐⭐ | 必问 |
+| Q5 | **Continuous Batching** | ⭐⭐⭐⭐⭐ | 必问 |
+| Q6 | Chunked Prefill 与 Decode 卡顿 | ⭐⭐⭐⭐ | 进阶 |
+| Q7 | Prefix Caching / RadixAttention | ⭐⭐⭐⭐ | 应用 |
 
 ---
 
@@ -60,7 +62,7 @@
 
 > $P$ = 模型参数量。注意最后两行：**Decode 每步的计算量只有 Prefill 的 $1/n$，但读权重的量一模一样**。这就是全部矛盾的来源。
 
-#### 一个具体的时间感
+#### 一个具体的时间感（🧮 估算）
 
 以 LLaMA-2 7B / A100-80G / fp16 为例，prompt 1000 token、输出 500 token：
 
@@ -128,12 +130,6 @@ vLLM 的 `paged_attention` kernel、FlashInfer 都是为 Decode 专门写的。*
 1. **不要说"Decode 慢是因为要算 attention"** —— 错。Decode 慢主要是**读权重**（batch 小时占大头），KV Cache 的读取在**长上下文 + 大 batch** 时才成为主要矛盾。要分清。
 2. **不要把 TTFT 和 TPOT 混着说** —— "推理延迟"这个词在面试里是模糊的，主动拆成 TTFT / TPOT 是专业度的体现。
 3. **不要忘了 Prefill 也产出 KV Cache** —— 很多人只说"Prefill 算出第一个 token"，漏掉了"顺便把 n 个位置的 KV 存下来"这个更重要的产出。
-
-### 🏢 大厂偏好
-
-- **字节 / 阿里（推理引擎、AI Infra 岗）**：必问，且会追问 PD 分离
-- **应用岗 / Agent 岗**：会从业务角度问——"用户抱怨慢，你怎么定位是 TTFT 还是 TPOT 的问题"
-- **DeepSeek**：会把这题引向 MLA 和 PD 分离的关系
 
 ### 📚 延伸阅读
 - [Efficient Memory Management for LLM Serving with PagedAttention](https://arxiv.org/abs/2309.06180) - vLLM 论文 §2 背景部分是最好的两阶段综述
@@ -205,9 +201,11 @@ $$\text{KVCache}_{\text{bytes}} = 2 \times B \times S \times L \times n_{kv} \ti
 | LLaMA-3 8B (GQA-8) | 32 | 8 | 128 | 1024 | **128 KB** | 0.5 GB |
 | DeepSeek-V3 (MLA) | 61 | — | — | 576 元素/层 | **≈ 70 KB** | 0.27 GB |
 
+> 🧮 以上数字都可以用公式直接算出（DeepSeek-V3：61 层 × 576 元素 × 2 字节 ≈ 69 KB/token）。
+>
 > 🚨 **注意第 3 行的反直觉结论**：**70B 的 KV Cache 比 7B 还小**（320 KB vs 512 KB）！因为 70B 用了 GQA-8。这是个绝佳的面试素材——它说明 **KV Cache 大小和模型参数量没有直接关系，只和"KV 头数 × 层数"有关**。
 >
-> MLA 那一行的 576 见第 2 章的推导（$d_c=512$ 压缩向量 + $d_h^R=64$ 解耦 RoPE 部分）。**MLA 相对 MHA 是两个数量级的差距**——这就是 DeepSeek 能开出极低 API 价格的底层原因之一。
+> MLA 那一行的 576 见第 2 章的推导（$d_c=512$ 压缩向量 + $d_h^R=64$ 解耦 RoPE 部分）。**MLA 相对同规模的 MHA（128 个头、head_dim 128）大约是两个数量级的差距**。💭 小 KV Cache 被普遍认为是 DeepSeek 推理成本低的原因之一。
 
 #### 显存全景：KV Cache 到底占多少？
 
@@ -246,7 +244,6 @@ def kv_cache_bytes(
     per_token_per_layer = 2 * num_kv_heads * head_dim * dtype_bytes
     return per_token_per_layer * num_layers * batch_size * seq_len
 
-
 # LLaMA-2 7B, batch=1, 4K 上下文
 n = kv_cache_bytes(1, 4096, 32, 32, 128)
 print(f"{n / 1024**3:.2f} GB")   # → 2.00 GB
@@ -274,7 +271,6 @@ class NaiveKVCache:
             self.v = torch.cat([self.v, new_v], dim=2)
         return self.k, self.v
 
-
 def decode_step(x, cache, W_q, W_k, W_v):
     q = x @ W_q                       # [B, 1, d]  只算新 token 的 Q
     new_k, new_v = x @ W_k, x @ W_v   # [B, 1, d]  只算新 token 的 K/V
@@ -297,7 +293,7 @@ A：有，而且不罕见。KV Cache 的收益是**省算力**，成本是**多�
 - 读权重：14 GB（固定）
 - 读 KV Cache：$S \times 512\text{KB}$
 
-当 $S = 28{,}000$ 时，读 KV Cache 的量就等于读权重了。再长下去，**KV Cache 成为 Decode 的主要瓶颈**，而不是权重。
+🧮 当 $S = 14\text{ GB} / 512\text{ KB} \approx 28{,}000$ 时，读 KV Cache 的量就等于读权重了。再长下去，**KV Cache 成为 Decode 的主要瓶颈**，而不是权重。
 
 这解释了三件事：
 1. 为什么**长上下文场景**（128K）下 Decode 会明显变慢——不是算力不够，是在搬 KV
@@ -309,10 +305,10 @@ A：有，而且不罕见。KV Cache 的收益是**省算力**，成本是**多�
 A：可以，这是一个活跃的研究方向，核心思路是"**attention 是稀疏的，大部分历史 token 拿不到权重**"。
 
 主流几派——
-- **StreamingLLM**：发现有 **attention sink** 现象（开头几个 token 拿走大量注意力，即使语义无关）。方案：**只保留最开头的几个 token + 最近的滑动窗口**，中间全丢。能无限长流式生成，但**真的会丢中间信息**——适合聊天，不适合长文档 QA。
-- **H2O (Heavy Hitter Oracle)**：用累积 attention 分数识别"重要 token"，动态驱逐低分的。
-- **SnapKV / PyramidKV**：在 Prefill 结束时一次性压缩，且**不同层保留不同比例**（浅层保留多、深层保留少）。
-- **量化而非丢弃**：KIVI、KVQuant——把 KV Cache 压到 int4/int2，不丢 token 只丢精度。
+- 📄 **StreamingLLM**（Xiao et al., ICLR 2024）：发现有 **attention sink** 现象（开头几个 token 拿走大量注意力，即使语义无关）。方案：**只保留最开头的几个 token + 最近的滑动窗口**，中间全丢。能无限长流式生成，但**真的会丢中间信息**——适合聊天，不适合长文档 QA。
+- 📄 **H2O**（Zhang et al., NeurIPS 2023）：用累积 attention 分数识别"重要 token"（heavy hitters），动态驱逐低分的。
+- 📄 **SnapKV**（Li et al., NeurIPS 2024）/ **PyramidKV**（Cai et al. 2024）：在 Prefill 结束时一次性压缩，且**不同层保留不同比例**（浅层保留多、深层保留少）。
+- **量化而非丢弃**：📄 KIVI（Liu et al., ICML 2024：Key 按通道量化、Value 按 token 量化，到 2 bit）、📄 KVQuant（Hooper et al., NeurIPS 2024）——不丢 token 只丢精度（→ 第 13 章）。
 
 **面试时的正确姿态**：这些都是**有损**的，工业上默认不开。要说清"**在什么场景下我愿意接受这个损失**"——比如超长上下文的摘要任务可以，法律文档精确检索不行。这种权衡意识比背名词重要。
 
@@ -323,7 +319,7 @@ A：这题是第 1 章的内容，但在推理场景下有个新角度——**MQ
 从 MHA（32 头）→ GQA-8：KV Cache 降 **4 倍**，质量几乎无损。
 从 GQA-8 → MQA（1 头）：再降 **8 倍**，但质量明显下降。
 
-而且有个工程细节：**TP（张量并行）下 MQA 很尴尬**——只有 1 个 KV 头，没法在 8 张卡之间切分，只能每张卡复制一份，白白浪费显存。**GQA-8 正好可以在 TP=8 时每卡一个头**，这个"凑巧"是 GQA 被广泛采用的隐藏原因之一。
+📄 GQA 论文（Ainslie et al. 2023）报告 GQA 的质量接近 MHA、速度接近 MQA。另外有个工程细节：**TP（张量并行）下 MQA 很尴尬**——只有 1 个 KV 头，没法在 8 张卡之间切分，只能每张卡复制一份，白白浪费显存。**GQA-8 正好可以在 TP=8 时每卡一个头**。💭 这个"凑巧"常被认为是 GQA-8 配置流行的原因之一。
 
 **MLA 是另一条路**：不减头数，而是**压维度**，所以能同时拿到"KV Cache 极小"和"等效多头质量"。代价是实现复杂（RoPE 解耦，见第 2 章）。
 
@@ -335,18 +331,12 @@ A：这题是第 1 章的内容，但在推理场景下有个新角度——**MQ
 4. **忽略 dtype** —— fp16 是 2 字节，但如果引擎开了 fp8 KV Cache，就减半了。答的时候把 dtype 说出来是专业度。
 5. **说"KV Cache 是推理的优化技巧"** —— 更准确的说法是：**它是自回归推理的必需品**，不用它慢一个数量级。真正的"技巧"是怎么**管理**它。
 
-### 🏢 大厂偏好
-
-- **所有大厂**：**这是推理部分的必考第一题**，且**极大概率要求现场算数**
-- **字节 / 阿里 Infra**：会给具体配置让你算显存和最大并发（上面"显存全景"那段就是标准答法）
-- **DeepSeek**：一定会引向 MLA
-- **应用岗**：会问"我们要支持 100 并发 × 32K 上下文，需要几张卡"——这题的实战形态
-
 ### 📚 延伸阅读
 - [Fast Transformer Decoding: One Write-Head is All You Need](https://arxiv.org/abs/1911.02150) - MQA 原论文，KV Cache 瓶颈的最早系统性分析
 - [GQA](https://arxiv.org/abs/2305.13245)
 - [StreamingLLM](https://arxiv.org/abs/2309.17453) - attention sink 现象
 - [SnapKV](https://arxiv.org/abs/2404.14469)
+- H2O: Zhang et al. NeurIPS 2023. arXiv:2306.14048；KIVI: Liu et al. ICML 2024. arXiv:2402.02750；KVQuant: Hooper et al. NeurIPS 2024. arXiv:2401.18079
 
 ---
 
@@ -375,7 +365,7 @@ A：这题是第 1 章的内容，但在推理场景下有个新角度——**MQ
 
 > **上限 = HBM 带宽 ÷ 模型大小**
 
-7B fp16 = 14 GB，A100 带宽 2000 GB/s → **最快 143 token/s**。任何声称 batch=1 单卡跑 7B 超过这个数的，要么用了量化（减小模型）、要么用了投机解码（一次出多个 token）——**不可能有第三种**。
+7B fp16 = 14 GB，A100 带宽 2000 GB/s → **最快 143 token/s**。任何声称 batch=1 单卡跑 7B fp16 稠密模型超过这个数的，要么用了量化（减小要读的字节）、要么用了投机解码（一次出多个 token）。（多卡张量并行会叠加带宽；MoE 每步只读激活专家，这两种情况上界不同。）
 
 **这也直接给出了三条优化路线**：
 1. **减小分子（模型大小）** → **量化**（第 13 章）
@@ -390,7 +380,7 @@ A：这题是第 1 章的内容，但在推理场景下有个新角度——**MQ
 
 $$\text{Machine Balance} = \frac{\text{Peak FLOPS}}{\text{Memory Bandwidth}}$$
 
-| GPU | 峰值算力 (fp16/bf16) | HBM 带宽 | **平衡点** |
+| GPU | 峰值算力（fp16/bf16 稠密，不含稀疏加速） | HBM 带宽 | **平衡点** |
 |---|---|---|---|
 | A100-80G | 312 TFLOPS | 2039 GB/s | ~153 FLOP/byte |
 | H100-SXM | 989 TFLOPS | 3350 GB/s | ~295 FLOP/byte |
@@ -407,9 +397,9 @@ Batch = $B$ 时：
 
 $$\text{Intensity} = \frac{2PB}{2P} = B \ \text{FLOP/byte}$$
 
-**极其漂亮的结论：算术强度 ≈ batch size。**
+**极其漂亮的结论：算术强度 ≈ batch size。** 📄 这一分析在 Pope et al. 2022（*Efficiently Scaling Transformer Inference*，Google）中有系统的推导。
 
-| batch | 算术强度 | A100 状态 | 吞吐（7B, token/s） |
+| batch | 算术强度 | A100 状态 | 吞吐上界（🧮 7B，忽略 KV Cache 读取） |
 |---|---|---|---|
 | 1 | 1 | 严重 memory-bound（算力利用 <1%） | ~140 |
 | 8 | 8 | memory-bound | ~1100 |
@@ -466,7 +456,7 @@ MoE 的 FLOPs 按**激活参数**算，但**访存要看情况**：
 - **batch=1**：只激活 top-k 个专家，**只需要读这几个专家的权重**。所以 MoE 在小 batch 下 memory 访问也少，Decode 反而**比同总参数的 Dense 快很多**——这是 MoE 推理友好的核心原因。
 - **batch 很大时**：不同序列会路由到**不同的专家**，batch 越大，被激活的专家并集越接近全部。极端情况下**要读全部专家的权重，但每个专家只服务少数几条序列**——算术强度不但没随 batch 线性上升，反而**塌了**。
 
-所以 **MoE 的算术强度增长曲线比 Dense 差**，需要 **EP（专家并行）+ 大 batch + 良好的负载均衡** 才能跑好。这就是为什么 DeepSeek-V3 的推理部署要用**很大的 EP 规模**（部署时 EP 甚至到几百）——**为了让每个专家都攒够 batch**。见第 15 章和 Frontier Topics 的 MoE 部分。
+所以 **MoE 的算术强度增长曲线比 Dense 差**，需要 **EP（专家并行）+ 大 batch + 良好的负载均衡** 才能跑好。📄 这就是为什么 DeepSeek-V3 的推理部署用了**很大的 EP 规模**：技术报告中 prefill 阶段以 4 个节点 32 张卡为最小部署单元（EP32），decode 阶段以 40 个节点 320 张卡为单元（EP320，每张卡大约放一个专家，另有冗余专家用于负载均衡）——**为了让每个专家都攒够 batch**。见第 15 章和 Frontier Topics 的 MoE 部分。
 
 **Q：算术强度这个分析对 Attention 部分也成立吗？**
 
@@ -489,13 +479,6 @@ A：不完全，要分开算——这也是为什么长上下文的行为不一�
 3. **不要忽略 attention 和权重的算术强度不同** —— 这是区分"看过博客"和"真做过"的题眼。
 4. **数字不要记死** —— 记 **A100 ≈ 150 FLOP/byte、7B fp16 单卡 ≈ 140 tok/s 上限** 这两个锚点就够，其他现场推。
 
-### 🏢 大厂偏好
-
-- **字节 / 阿里 AI Infra、推理引擎岗**：必问，且会现场让你算 Roofline
-- **Meta（Production Engineer / Inference）**：会问 GPU 型号相关的具体数字
-- **DeepSeek**：会引向 MoE 的算术强度和 EP 部署
-- **应用岗**：不会问得这么深，但**能主动说出这套分析，会显著抬高面试官对你的评级**——因为这证明你不是只会调 API
-
 ### 📚 延伸阅读
 - [Roofline: An Insightful Visual Performance Model](https://dl.acm.org/doi/10.1145/1498765.1498785) - Roofline 原论文（2009，非 LLM，但是思想源头）
 - [Efficiently Scaling Transformer Inference](https://arxiv.org/abs/2211.05102) - Google 的推理 scaling 分析，Roofline 用得最漂亮的一篇
@@ -507,7 +490,7 @@ A：不完全，要分开算——这也是为什么长上下文的行为不一�
 
 ### 🎯 一句话标答
 
-> 传统实现要为每条请求**按 max_seq_len 预分配连续显存**，导致 **60–80% 的 KV Cache 显存被浪费**在内部碎片、外部碎片和无法共享上；PagedAttention 借鉴**操作系统虚拟内存的分页**思想，把 KV Cache 切成固定大小的 block、**物理不连续、用 block table 映射**，把浪费降到 **4% 以下**，从而把并发数（进而吞吐）提升 **2–4 倍**。
+> 📄 vLLM 论文（Kwon et al., SOSP 2023）发现，已有系统为每条请求**按 max_seq_len 预分配连续显存**，**只有 20%–38% 的 KV Cache 显存真正存放了 token 状态**，其余浪费在内部碎片、外部碎片和无法共享上；PagedAttention 借鉴**操作系统虚拟内存的分页**思想，把 KV Cache 切成固定大小的 block、**物理不连续、用 block table 映射**，把浪费降到 **4% 以下**。在相同延迟下，吞吐相对 FasterTransformer 和 Orca 提升 **2–4 倍**。
 
 ### 🗣️ 30 秒口语版
 
@@ -522,7 +505,7 @@ A：不完全，要分开算——这也是为什么长上下文的行为不一�
 2. **外部碎片（External Fragmentation）**：不同请求的预留块大小不一，中间留下的空隙塞不进新请求 → 显存明明够，但"装不下"。
 3. **无法共享**：两个请求用同一个 system prompt，或者并行采样（n=4）从同一个 prompt 分叉，本来 KV 完全一样，但因为要求连续，只能**各存一份**。
 
-vLLM 论文测出来：**这三种浪费加起来，真正有效的 KV Cache 显存只有 20–40%**。
+📄 vLLM 论文测出来：**这三种浪费加起来，真正有效的 KV Cache 显存只有约 20%–38%**。
 
 **PagedAttention 的解法——直接抄操作系统**：
 
@@ -539,7 +522,7 @@ vLLM 论文测出来：**这三种浪费加起来，真正有效的 KV Cache 显
 
 **代价**：attention kernel 要重写——不能再假设 KV 连续，必须**先查 block table 再 gather**。这就是为什么它叫 Paged**Attention** 而不是 PagedCache——**核心工作量在 kernel 里**。
 
-**最终效果**：vLLM 论文报告相对 HF Transformers 和 Orca，吞吐提升 **2–4 倍**。这就是 vLLM 一战成名的原因。"
+**最终效果**：📄 vLLM 论文报告在相同延迟下，吞吐相对 FasterTransformer 和 Orca 提升 **2–4 倍**（vLLM 发布博客中相对 HF Transformers 的提升更大，最高约 24 倍）。这就是 vLLM 一战成名的原因。"
 
 ### 📐 详细机制
 
@@ -562,7 +545,6 @@ vLLM 论文测出来：**这三种浪费加起来，真正有效的 KV Cache 显
 请求 C, D 用同一个 system prompt (500 token):
 C: [system 500][C 自己的...]     ┐
 D: [system 500][D 自己的...]     ┘  ← 同样的 500 token 存了两份
-
 
 【PagedAttention：分页，block = 16 token】
 
@@ -650,7 +632,7 @@ for logical_blk in range(num_blocks):
 **Block size 的权衡**：
 - 太小（如 1）：block table 巨大，查表开销高，kernel 里循环次数多
 - 太大（如 256）：退化回连续分配，内部碎片重新变大
-- **16 是 vLLM 的默认值**——经验最优点。这个数字最好记住。
+- **16 是 vLLM 的默认值**。📄 vLLM 论文的实验中，16 在不同负载下表现较好：太小会降低 GPU 并行度，太大会增加内部碎片。
 
 ### 🔥 高频追问 Top 3
 
@@ -664,7 +646,7 @@ A：**抢占（Preemption）**。vLLM 有两种策略：
 2. **Recomputation（丢弃后重算）**：直接丢掉 KV Cache，等恢复时重新 Prefill 一遍。
    - 优点：不占 PCIe
    - 缺点：白算一遍
-   - **但注意**：重算是 Prefill（compute-bound、并行），而 swap 是搬数据（PCIe-bound）。**在多数配置下重算反而更快**——这个反直觉结论 vLLM 论文里实测过。
+   - **但注意**：重算是 Prefill（compute-bound、并行），而 swap 是搬数据（PCIe-bound）。📄 vLLM 论文的测量显示：block 较小时（如默认的 16），swap 需要大量小块的 PCIe 传输，开销很大，重算更划算；block 较大时 swap 才更有优势。
 
 **抢占哪条序列？** vLLM 默认 **FCFS 的反向**——最晚来的先被踢（避免饿死老请求），且**整条序列一起踢**（因为一条序列的 block 是有依赖的，踢一半没意义）。
 
@@ -704,13 +686,6 @@ vLLM/SGLang 对 MLA 的支持经历过一轮专门适配（MLA 的 paged kernel 
 2. **忘了 Copy-on-Write / 共享** —— 这是 PagedAttention 的"第二半"，很多人只记得碎片，忘了共享。而共享正好是 Prefix Caching（Q7）的基础。
 3. **说 PagedAttention 让 attention 算得更快** —— **反了**！它让 attention 算得**更慢**（-20%），但让系统吞吐更快（+2~4×）。这个点答反了会被扣分，答对了会加分。
 4. **把 PagedAttention 和 Continuous Batching 混为一谈** —— 两个正交的技术：**PagedAttention 管显存怎么放**，**Continuous Batching 管请求怎么调度**。vLLM 两个都做了，但它们是不同的层。面试里经常一起问，要能分开讲。
-
-### 🏢 大厂偏好
-
-- **字节 / 阿里（推理引擎、AI Infra）**：**必问，且是深挖题**——会追问 block size 怎么选、抢占策略、kernel 实现
-- **应用岗 / Agent 岗**：会问"为什么用 vLLM 不用 HF pipeline"——这题就是标准答案
-- **Meta**：会从系统设计角度问 OS 类比
-- **DeepSeek**：会问 MLA 下的 paging 适配
 
 ### 📚 延伸阅读
 - [Efficient Memory Management for LLM Serving with PagedAttention](https://arxiv.org/abs/2309.06180) - **vLLM 原论文，本章最该精读的一篇**，§3 是核心
@@ -865,13 +840,6 @@ A：三个，都很现实：
 3. **把 Continuous Batching 和 PagedAttention 说成一个东西** —— 它们是两层。
 4. **只说好处不说代价** —— 主动说出"抢占伤 P99"和"Prefill 卡 Decode"，会显得你真的看过线上指标。
 
-### 🏢 大厂偏好
-
-- **字节 / 阿里（推理、Infra）**：必问，会追问调度策略和公平性
-- **应用岗**：会问"你们 QPS 上不去怎么办"——这题是第一层答案
-- **Meta**：会问 SLA 分级和尾延迟
-- **所有岗位**：**"vLLM 为什么快"这个问题的完整答案 = PagedAttention + Continuous Batching**，两个都要说
-
 ### 📚 延伸阅读
 - [Orca: A Distributed Serving System for Transformer-Based Generative Models](https://www.usenix.org/conference/osdi22/presentation/yu) - **OSDI'22，continuous batching 的原论文**
 - [How continuous batching enables 23x throughput in LLM inference](https://www.anyscale.com/blog/continuous-batching-llm-inference) - Anyscale 的经典博客，那个 23× 的数字出处
@@ -1021,12 +989,6 @@ Chunked Prefill 里被切的**只有 prefill 部分**。真正被限制的是"**
 3. **以为它有损** —— 它是**完全无损**的调度优化。
 4. **不知道它现在是默认开启的** —— vLLM V1 默认开，说"这是个可选优化"会显得没跟上版本。
 
-### 🏢 大厂偏好
-
-- **字节 / 阿里推理引擎岗**：会问，属于"区分度题"——答得出来说明真在做推理
-- **应用岗**：不常直接问，但如果你在项目里提到"优化了流式输出的卡顿"，会被追问到这里
-- **Agent 岗**：**高度相关**——Agent 的 prompt 特别长（工具定义 + 历史 + RAG 上下文），generation stall 是真实痛点
-
 ### 📚 延伸阅读
 - [SARATHI: Efficient LLM Inference by Piggybacking Decodes with Chunked Prefills](https://arxiv.org/abs/2308.16369) - 原论文
 - [Taming Throughput-Latency Tradeoff in LLM Inference with Sarathi-Serve](https://arxiv.org/abs/2403.02310) - OSDI'24，"stall-free batching" 的完整系统
@@ -1058,7 +1020,7 @@ Chunked Prefill 里被切的**只有 prefill 部分**。真正被限制的是"**
 **Prefix Caching**：把这些前缀的 KV Cache 留在显存里，下次命中直接复用。
 
 **收益**：
-- **TTFT 暴降**：只需 prefill 那 20 个新 token，而不是 6520 个。实测能降 **5-10 倍**
+- **TTFT 暴降**：只需 prefill 那 20 个新 token，而不是 6520 个。💭 实际降幅取决于命中的前缀长度和总长度之比
 - **吞吐提升**：省下来的算力给别人用
 
 **为什么能这么干？** 还是 causal mask——**前缀的 KV 只依赖前缀本身，跟后面接什么内容完全无关**。所以"[system][few-shot]" 这段的 KV，无论后面接什么问题，**永远是同一个值**。
@@ -1098,7 +1060,6 @@ def compute_block_hash(prev_block_hash, token_ids_in_this_block):
     但它们的前缀不同 → KV 值其实不同 → 结果错误
     """
     return hash((prev_block_hash, tuple(token_ids_in_this_block)))
-
 
 class PrefixCache:
     def __init__(self):
@@ -1163,7 +1124,7 @@ llm = LLM(model="...", enable_prefix_caching=True)   # vLLM V1 已默认开启
 
 A：三个真实的顾虑：
 
-1. **安全 / 隐私（最重要）**：**跨用户共享 KV Cache 意味着跨用户共享数据**。虽然 KV 本身不能直接"读出"原文，但存在**时序侧信道攻击**——攻击者构造 prompt，通过观测 **TTFT 是否异常快**来判断"这个前缀是否被别人用过"，从而**探测其他用户的输入**。真实的公有云部署要考虑**按租户隔离 cache**。**这个点非常加分**——说明你有安全意识。
+1. **安全 / 隐私（最重要）**：**跨用户共享 KV Cache 意味着跨用户共享数据**。虽然 KV 本身不能直接"读出"原文，但存在**时序侧信道攻击**——攻击者构造 prompt，通过观测 **TTFT 是否异常快**来判断"这个前缀是否被别人用过"，从而**探测其他用户的输入**。📄 Song et al. 2024（*The Early Bird Catches the Leak: Unveiling Timing Side Channels in LLM Serving Systems*）演示了针对前缀缓存的这类攻击。真实的公有云部署要考虑**按租户隔离 cache**（例如 vLLM 支持为请求设置 `cache_salt`，只有相同 salt 的请求才能共享缓存）。
 2. **显存占用**：cache 占着的显存就不能给 KV Cache 用了。命中率低的场景（每个用户 prompt 都不同），纯亏。所以需要 **LRU + 显存预算控制**。
 3. **一致性**：如果同一个前缀在不同精度/不同 batch 下算出来的 KV 有微小浮点差异，复用会引入不可复现性。实践上影响可忽略，但**回归测试要留意**。
 
@@ -1214,16 +1175,11 @@ A：**这是应用岗最实用的一题**，核心原则是"**把稳定的放前
 3. **不提安全风险** —— 跨租户的 KV 共享是有侧信道的，能提到会显著加分。
 4. **不知道"变化的东西放最后"这条铁律** —— 这是应用侧最实用的一条，不知道说明没在生产上用过。
 
-### 🏢 大厂偏好
-
-- **应用岗 / Agent 岗**：**高频**，且会问"你怎么优化的 Agent 延迟"——prompt 结构那题就是最好的答案
-- **字节 / 阿里**：会问 vLLM hash 方案 vs SGLang radix tree 的取舍
-- **有公有云业务的团队（阿里云、火山引擎）**：**会问跨租户的安全隔离**
-
 ### 📚 延伸阅读
 - [SGLang: Efficient Execution of Structured Language Model Programs](https://arxiv.org/abs/2312.07104) - RadixAttention 原论文
 - [vLLM Automatic Prefix Caching 设计文档](https://docs.vllm.ai/en/latest/design/v1/prefix_caching.html)
 - [Prompt Cache](https://arxiv.org/abs/2311.04934) - 更激进的方案：连**非前缀**的模块化片段也想复用
+- Song et al. *The Early Bird Catches the Leak*. 2024. arXiv:2409.20002 - 前缀缓存的时序侧信道
 
 ---
 
