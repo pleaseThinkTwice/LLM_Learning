@@ -16,18 +16,20 @@
 
 ---
 
+> **标注约定**：📄 论文/官方报告结论（附出处）｜🧮 可推导/可算｜💭 直觉、经验或有争议｜❓ 开放问题。
+
 ## 📌 本章导航
 
-| 序号 | 题目 | 难度 | 频率（字节/阿里/Meta/DeepSeek） | 类型 |
-|---|---|---|---|---|
-| Q1 | **ReAct 循环——Agent 的骨架** | ⭐⭐⭐⭐⭐ | **9 / 8 / 6 / 4** | 必问 |
-| Q2 | **Plan-and-Execute vs ReAct** | ⭐⭐⭐⭐⭐ | **8 / 7 / 5 / 4** | 必问 |
-| Q3 | **Reflexion 与自我修正的边界** | ⭐⭐⭐⭐ | 7 / 6 / 5 / 5 | 进阶·有反面证据 |
-| Q4 | **记忆系统：记什么、怎么忘** | ⭐⭐⭐⭐⭐ | **8 / 7 / 5 / 3** | 必问 |
-| Q5 | **Context Engineering** | ⭐⭐⭐⭐⭐ | **8 / 7 / 5 / 4** | 必问·前沿 |
-| Q6 | **多智能体：为什么，以及为什么<u>不</u>** | ⭐⭐⭐⭐⭐ | **8 / 7 / 6 / 4** | 必问·有争议 |
-| Q7 | **可靠性工程：错误累积与状态管理** | ⭐⭐⭐⭐⭐ | **8 / 7 / 6 / 3** | 必问·实战 |
-| Q8 | **Workflow vs Agent——什么时候<u>不</u>该用 Agent** | ⭐⭐⭐⭐⭐ | **8 / 7 / 6 / 4** | 压轴·成熟度 |
+| 序号 | 题目 | 难度 | 类型 |
+|---|---|---|---|
+| Q1 | **ReAct 循环——Agent 的骨架** | ⭐⭐⭐⭐⭐ | 必问 |
+| Q2 | **Plan-and-Execute vs ReAct** | ⭐⭐⭐⭐⭐ | 必问 |
+| Q3 | **Reflexion 与自我修正的边界** | ⭐⭐⭐⭐ | 进阶·有反面证据 |
+| Q4 | **记忆系统：记什么、怎么忘** | ⭐⭐⭐⭐⭐ | 必问 |
+| Q5 | **Context Engineering** | ⭐⭐⭐⭐⭐ | 必问·前沿 |
+| Q6 | **多智能体：为什么，以及为什么<u>不</u>** | ⭐⭐⭐⭐⭐ | 必问·有争议 |
+| Q7 | **可靠性工程：错误累积与状态管理** | ⭐⭐⭐⭐⭐ | 必问·实战 |
+| Q8 | **Workflow vs Agent——什么时候<u>不</u>该用 Agent** | ⭐⭐⭐⭐⭐ | 压轴·成熟度 |
 
 ---
 
@@ -325,13 +327,6 @@ $$\boxed{\text{Prompt 技巧} \to \text{训练进模型} \to \text{固化进 cha
 5. **不知道外部信息是双刃剑** —— **能纠正幻觉，也能带偏推理**。
 6. **超步数后还给 tools** —— **不给工具，它才只能回答**。
 
-### 🏢 大厂偏好
-
-- **所有 Agent 岗**：**必问，且是开场题**
-- **字节 / 阿里**：会问"ReAct 和 CoT 的区别"、"Thought 能不能省"
-- **应用岗**：会问 Agent 的三个失败模式
-- **所有岗**：**"开环 vs 闭环"能一句话讲透**
-
 ### 📚 延伸阅读
 - [ReAct](https://arxiv.org/abs/2210.03629) - **ICLR 2023，"56% 的 CoT 错误是幻觉"在 §3.3**
 - [Anthropic: Building Effective Agents](https://www.anthropic.com/engineering/building-effective-agents) - **本章最该精读的一篇**
@@ -394,7 +389,7 @@ Worker（执行，★填充变量★）：
 Solver（★一次★ LLM 调用，汇总）
 ```
 $$\boxed{\text{★因为 planner 从不看 observation，它的 context 是固定的 → token 从 $O(N^2)$ 降到 $O(N)$★}}$$
-**ReWOO 论文报告：token 减少 5×，且准确率不降。**
+📄 **ReWOO 论文报告：HotpotQA 上 token 效率提升约 5×，准确率还提高了约 4 个点。**
 
 **判据：你对环境的了解程度。**
 
@@ -624,12 +619,6 @@ Execute: [ReAct: 查 A]  ∥  [ReAct: 查 B]  →  [ReAct: 对比]
 4. ⭐ **replan 的检测比它省的还贵** —— **用小模型 / 只检测关键步骤**。
 5. **不知道 ReWOO 为什么省 token** —— **planner 不看 observation**。
 6. **忘了"分段规划"是个连续旋钮** —— $k$ 从 1 到 N，就是从 ReAct 到 Plan。
-
-### 🏢 大厂偏好
-
-- **Agent 岗**：**必问**，会问"你们的 Agent 是哪种架构"
-- **字节 / 阿里**：会问 token 复杂度和成本
-- **所有岗**：**"编译 vs 解释"这个框架能一次性讲透**
 
 ### 📚 延伸阅读
 - [ReWOO](https://arxiv.org/abs/2305.18323) - **变量占位 + token 减少 5×**
@@ -881,13 +870,6 @@ $$\boxed{\text{★o1/R1 = "把 Reflexion 从推理时的技巧变成模型的本
 3. **以为 Reflexion 是"让模型反思"** —— **它是"把外部反馈语言化"**。
 4. **忘了反思也可能错** —— **归因是个难问题**，且错的反思**会持续污染 memory**。
 5. **不知道它和 o1 的关系** —— **同一个洞察，一个在 context 一个在权重**。
-
-### 🏢 大厂偏好
-
-- **Agent 岗**：会问"怎么让 Agent 自我修正"—— ⭐ **答"先问有没有 verifier"是最好的开场**
-- **字节 / 阿里**：会问 Reflexion 的局限
-- **做推理模型的团队**：会引向 o1/R1 和可验证 reward
-- **所有岗**：⭐ **"验证比生成容易"这条元原理能串起半本书**
 
 ### 📚 延伸阅读
 - [Reflexion](https://arxiv.org/abs/2303.11366) - NeurIPS 2023
@@ -1197,13 +1179,6 @@ $$\boxed{\text{★把"每轮检索"变成"每会话检索一次" —— 用一�
 5. **三个分数直接相加** —— **量纲不同**！应该用 **RRF**（第 16 章 Q4）。
 6. ⭐ **不知道记忆和缓存天然对立** —— 这是 Q5 的核心。
 
-### 🏢 大厂偏好
-
-- **Agent 岗**：**必问**，会问"你们的长期记忆怎么做"
-- **字节 / 阿里**：会问 Generative Agents 的三个分数
-- **做陪伴/角色扮演产品的团队**：⭐ **必问，且会深挖冲突消解**
-- **所有岗**：⭐ **"重要性由用途定义"这句话能一句话体现你的产品思维**
-
 ### 📚 延伸阅读
 - [Generative Agents](https://arxiv.org/abs/2304.03442) - ⭐ **斯坦福小镇，三分数 + Reflection，本题必读**
 - [MemGPT](https://arxiv.org/abs/2310.08560) - **虚拟内存类比**
@@ -1364,10 +1339,10 @@ $$\text{softmax 的概率和恒为 1} \Rightarrow \text{context 越长，每个 
 
 **③ ⭐ 训练分布**（最容易被忽略）
 $$\boxed{\text{★模型的训练数据里，超长样本极少★}}$$
-- 号称 128K，但**训练时见过的 128K 样本可能只占 0.1%**
+- 号称 128K，但**训练时见过的接近 128K 的样本占比很低**（💭 具体比例各家不公开；长上下文扩展阶段的 token 量通常远小于预训练，见第 2 章）
 - 长上下文能力主要靠**外推**（PI/NTK/YaRN，第 2 章）+ **少量长样本微调**
 - → **在 128K 上，模型是在"<u>分布外</u>"工作**
-- → **RULER 的发现**（第 16 章 Q1）：**很多号称 128K 的模型，32K 就退化了**
+- → 📄 **RULER 的发现**（Hsieh et al. 2024）：所测的号称支持 ≥32K 的模型里，**只有约一半在 32K 上还能保持令人满意的表现**
 
 **三个机制的共同结论**：
 $$\boxed{\text{★"支持 128K" ≠ "在 128K 上好用" —— 有效上下文远小于标称上下文★}}$$
@@ -1479,13 +1454,6 @@ $$\boxed{\text{★"用得到的概率 × 大小" —— 概率高且小的预加
 5. **不知道 Write 和 Isolate 是缓存友好的** —— **应该优先用它们**。
 6. **JIT 一把梭** —— **JIT 用延迟换 context 质量**，小而稳定的该预加载。
 
-### 🏢 大厂偏好
-
-- **Agent 岗**：**必问**（这是 2025 年最热的话题）
-- **字节 / 阿里**：会问"Agent 的 context 怎么管"
-- **有长上下文产品的团队**：会深挖 Context Rot
-- **所有岗**：⭐ **"压缩和缓存不可调和"这个矛盾能说出来，说明你真的做过**
-
 ### 📚 延伸阅读
 - [Anthropic: Effective Context Engineering for AI Agents](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents) - ⭐ **本题必读**
 - [Context Engineering for Agents (LangChain)](https://blog.langchain.com/context-engineering-for-agents/) - **Write/Select/Compress/Isolate 的分类出处**
@@ -1497,7 +1465,7 @@ $$\boxed{\text{★"用得到的概率 × 大小" —— 概率高且小的预加
 
 ### 🎯 一句话标答
 
-> 多 Agent 最实际的理由**不是"专业化"，是 <u>Context 隔离</u>**（Q5 的 Isolate）——每个 sub-agent 有自己干净的 context，**主 Agent 只收结论**；Anthropic 的数据：**研究任务上多 Agent 比单 Agent 好 90.2%，但 token 消耗是 4 倍**（是普通 chat 的 15 倍）；**但 Cognition（Devin）公开反对**——*"Don't Build Multi-Agents"*，理由是 **context 分散导致决策不一致**；**这个争论的本质很有意思：多 Agent 的<u>优势</u>和<u>劣势</u>是<u>同一件事</u>——隔离带来干净，也带来失联**；判据只有一个：**任务能不能<u>干净地</u>分解成<u>相互独立</u>的子任务**。
+> 多 Agent 最实际的理由**不是"专业化"，是 <u>Context 隔离</u>**（Q5 的 Isolate）——每个 sub-agent 有自己干净的 context，**主 Agent 只收结论**；Anthropic 的数据：**在其内部研究类评测上多 Agent 比单 Agent 好 90.2%，但 token 消耗约是普通 chat 的 15 倍**（单 Agent 约 4 倍）；**但 Cognition（Devin）公开反对**——*"Don't Build Multi-Agents"*，理由是 **context 分散导致决策不一致**；**这个争论的本质很有意思：多 Agent 的<u>优势</u>和<u>劣势</u>是<u>同一件事</u>——隔离带来干净，也带来失联**；判据只有一个：**任务能不能<u>干净地</u>分解成<u>相互独立</u>的子任务**。
 
 ### 🗣️ 30 秒口语版
 
@@ -1524,8 +1492,9 @@ $$\boxed{\text{★"用得到的概率 × 大小" —— 概率高且小的预加
 $$\boxed{\text{★多 Agent 的本质是"分布式的 context 管理"★}}$$
 
 **Anthropic 的数据（要能报）**：
-- **研究任务上，多 Agent 比单 Agent 好 90.2%**
-- ⚠️ **但 token 消耗是单 Agent 的 4 倍**（是普通 chat 的 **15 倍**！）
+- 📄 **内部研究类评测上，多 Agent（Opus 4 主控 + Sonnet 4 子 Agent）比单 Agent Opus 4 好 90.2%**
+- ⚠️ **但 token 消耗约是普通 chat 的 15 倍**（单 Agent 约 4 倍 → 多 Agent 约是单 Agent 的 3-4 倍）
+- 📄 同一篇文章的另一个发现更值得研究者注意：在 BrowseComp 上，**token 用量本身就解释了约 80% 的性能方差**——多 Agent 的收益很大一部分来自"花了更多 token"，而不只是架构本身
 - → **只在"价值 > 成本"时用**
 
 **⚠️ 但——Cognition（Devin 的公司）公开反对：*"Don't Build Multi-Agents"***
@@ -1592,14 +1561,16 @@ $$\boxed{\text{★他们不是在吵架，是在做不同的任务★}}$$
 
 $$\text{Cost}_{\text{multi}} = \underbrace{C_{\text{orch}}}_{\text{主 Agent}} + \sum_{i=1}^{N}\underbrace{C_{\text{sub}_i}}_{\text{每个 sub}} + \underbrace{C_{\text{comm}}}_{\text{通信}}$$
 
-**Anthropic 的实测**：
+📄 **Anthropic 的报告**（*How we built our multi-agent research system*, 2025）：
 | | token 消耗 |
 |---|---|
 | 普通 chat | **1×** |
 | 单 Agent | **~4×** |
 | **多 Agent** | ⭐ **~15×** |
 
-$$\boxed{\text{★多 Agent 比单 Agent 贵 4 倍，比 chat 贵 15 倍★}}$$
+$$\boxed{\text{★单 Agent ≈ chat 的 4 倍，多 Agent ≈ chat 的 15 倍★}}$$
+
+> ❌ 旧版写"多 Agent 比单 Agent 贵 4 倍"——原文的 4× 是单 Agent 相对 chat，不是多 Agent 相对单 Agent。
 
 **为什么这么贵**：
 1. **每个 sub-agent 都要一份 system prompt + tools**（**重复的固定成本**！）
@@ -1734,12 +1705,6 @@ $$\boxed{\text{★给"目的"，不只给"任务" —— 目的让 sub-agent 能
 6. ⭐ **不知道"摘要会洗白不确定性"** —— 比信息损失更危险。
 7. **用 prompt 防递归** —— **不给 spawn 工具，从能力上杜绝**。
 
-### 🏢 大厂偏好
-
-- **Agent 岗**：**必问**，且会问"多 Agent 真的有必要吗"
-- **字节 / 阿里**：会问编排模式和成本
-- **所有岗**：⭐ **能讲出 Anthropic vs Cognition 的争论并<u>调和</u>它，是本章最强的信号**
-
 ### 📚 延伸阅读
 - [Anthropic: Multi-Agent Research System](https://www.anthropic.com/engineering/multi-agent-research-system) - ⭐ **90.2% 和 15× token 的出处**
 - [**Cognition: Don't Build Multi-Agents**](https://cognition.ai/blog/dont-build-multi-agents) - ⭐ **反方观点，必读**
@@ -1837,6 +1802,9 @@ $$\boxed{\text{★Agent 的失败是路径依赖的 —— 你必须能重放整
 
 $$P(\text{任务成功}) = \prod_{i=1}^{N} p_i \approx p^N$$
 
+> 💭 **这个模型的两个强假设**：① 各步**独立**——真实中错误是相关的（同一类任务模型要么一直会、要么一直不会）；② **一步错 = 全盘错**——真实 Agent 常能从错误中恢复。所以 $p^N$ 是**悲观的直觉工具**，不是预测公式。
+> 📄 METR（Kwa et al. 2025, *Measuring AI Ability to Complete Long Tasks*）给了一个经验视角：用"模型以 50% 成功率能完成的任务所需人类时长"（time horizon）衡量 Agent 能力，发现该指标在 2019–2025 年间约 **每 7 个月翻一倍**；成功率随任务长度的下降可以用 logistic 曲线很好地拟合——这与"每步独立失败"的指数模型精神一致，但参数是从数据中拟合的。
+
 **要达到目标成功率 $T$，所需的单步准确率**：
 $$p \ge T^{1/N}$$
 
@@ -1861,7 +1829,7 @@ $$\boxed{\text{★"步数减半"比"单步提 1 个点"有效 3 倍，而且容�
 
 **加了验证之后**：
 $$P = \big(p^K \cdot (1 + (1-p^K)\cdot r)\big)^{N/K}$$
-其中 $K$ = 检查点间隔，$r$ = 验证发现错误后的修复率。
+其中 $K$ = 检查点间隔，$r$ = 验证发现错误后的修复率。（🧮 玩具模型：每段 $K$ 步要么一次成功（$p^K$），要么失败后以概率 $r$ 被发现并重跑一次、重跑再以 $p^K$ 成功，即 $p^K + (1-p^K)\,r\,p^K$；假设验证器本身不出错。）
 
 **代入 $p=0.95$、$N=20$、$K=5$、$r=0.8$**：
 $$\big(0.95^5 \times (1 + 0.226\times0.8)\big)^4 = (0.774 \times 1.18)^4 = 0.913^4 = \mathbf{69\%}$$
@@ -2043,13 +2011,6 @@ $$\boxed{\text{★"平均步数"是最灵敏的先行指标 —— 它比"成功
 6. ⭐ **不监控"平均步数"** —— **最灵敏的先行指标**。
 7. **验证没有 verifier** —— **那一层就是摆设**（Q3）。
 
-### 🏢 大厂偏好
-
-- **Agent 岗**：**必问**，且是**区分度最高**的一题
-- **字节 / 阿里**：会问"Agent 成功率上不去怎么办"—— ⭐ **答"先减步数"**
-- **有交易业务的团队**：⭐ **必问 Saga 和补偿**
-- **所有岗**：⭐ **$0.95^{20}=36\%$ 这个数字说出来，就赢了一半**
-
 ### 📚 延伸阅读
 - [LangGraph 的持久化](https://langchain-ai.github.io/langgraph/concepts/persistence/) - checkpointer
 - [Saga 模式](https://microservices.io/patterns/data/saga.html) - **微服务的经典模式，Agent 直接复用**
@@ -2155,7 +2116,7 @@ $$\boxed{\begin{aligned}\text{Orchestrator-Workers} &: \text{主管动态决定�
 
 | | **单次调用** | **Workflow** | **Agent** | **多 Agent** |
 |---|---|---|---|---|
-| **成本** | **1×** | **2-5×** | **5-20×** | ⭐ **15-60×** |
+| **成本**（💭 量级示意） | **1×** | **2-5×** | **5-20×** | ⭐ **15-60×** |
 | **延迟** | **2s** | **5-15s** | ❌ **10-60s** | ❌ **30-300s** |
 | **可预测** | ⭐ **完全** | ⭐ **高** | ❌ **低** | ❌❌ **很低** |
 | **可调试** | ⭐ **易** | ⭐ **易** | ⚠️ **难**（要 trace） | ❌ **很难** |
@@ -2266,18 +2227,19 @@ $$\boxed{\text{★Demo 是"单次采样"，生产是"期望值" —— 而 Agent
 5. **把 Workflow 包装成"多 Agent"** —— 没什么不好，**但别为它付 Agent 的价钱**。
 6. **不知道混合是主流** —— **Workflow 骨架 + Agent 血肉**，且 **Agent 可以调用 Workflow**。
 
-### 🏢 大厂偏好
-
-- **所有 Agent 岗**：⭐ **必考，且是<u>成熟度</u>的分水岭**
-- **字节 / 阿里**：会给场景问"这个该用 Agent 吗"
-- **有生产 Agent 的团队**：⭐ **能说"我们 95% 的流量走 Workflow"是最真实的回答**
-- **所有岗**：⭐ **"能说不要用 Agent 的人，才是真的懂 Agent"**
-
 ### 📚 延伸阅读
 - [**Anthropic: Building Effective Agents**](https://www.anthropic.com/engineering/building-effective-agents) - ⭐⭐ **本章、乃至整个第四部分最该精读的一篇**
 - [Anthropic: Writing effective tools for agents](https://www.anthropic.com/engineering/writing-tools-for-agents)
 
 ---
+
+## 🔬 研究前沿与开放问题
+
+- 📄 **从 prompt 编排到端到端 RL**：编程 Agent 的进展越来越来自"在真实环境里用结果奖励做 RL"（SWE-bench 类可验证任务，如 SWE-RL, Wei et al. 2025），而不是更精巧的 ReAct 模板。💭 这使本章的许多"架构技巧"可能被训进权重——正如 o1/R1 把 Reflexion 式的自我检查训进了模型（Q3）。
+- 📄 **评测在快速演化**：SWE-bench Verified（OpenAI 与原作者人工筛选的 500 题子集）、τ-bench（多轮 + 状态 + pass^k，第 17 章）、GAIA、OSWorld、METR 的 time horizon。💭 共同的趋势是**从单轮正确率转向长程、有状态、看可靠性的指标**。
+- ❓ **错误相关性**：$p^N$ 假设独立，真实失败高度相关。怎样从 trace 数据中估计"可恢复错误"与"致命错误"的比例？这决定了检查点/验证器该放在哪。
+- ❓ **多 Agent 的真实增益**：Anthropic 发现 token 用量解释了约 80% 的方差。那么**在等 token 预算下**，多 Agent 相比"单 Agent + 更长思考"还剩多少收益？这是一个很干净、目前缺少公开答案的对照实验。
+- 🧪 实验设想（文字）：在一个可验证任务集（如 SWE-bench Verified 子集）上，固定总 token 预算，比较 ① 单 Agent ② 单 Agent + 定期上下文压缩 ③ 主从多 Agent，记录成功率与 prefix cache 命中率——可同时检验 Q5（压缩 vs 缓存）和 Q6（隔离的收益）。
 
 ## 📝 本章小结
 
