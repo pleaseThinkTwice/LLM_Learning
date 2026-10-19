@@ -1179,7 +1179,7 @@ A：**这是应用岗最实用的一题**，核心原则是"**把稳定的放前
 - [SGLang: Efficient Execution of Structured Language Model Programs](https://arxiv.org/abs/2312.07104) - RadixAttention 原论文
 - [vLLM Automatic Prefix Caching 设计文档](https://docs.vllm.ai/en/latest/design/v1/prefix_caching.html)
 - [Prompt Cache](https://arxiv.org/abs/2311.04934) - 更激进的方案：连**非前缀**的模块化片段也想复用
-- Song et al. *The Early Bird Catches the Leak*. 2024. arXiv:2409.20002 - 前缀缓存的时序侧信道
+- Song et al. *The Early Bird Catches the Leak: Unveiling Timing Side Channels in LLM Serving Systems*. 2024 - 前缀缓存的时序侧信道
 
 ---
 
