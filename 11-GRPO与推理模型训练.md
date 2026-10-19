@@ -1,1266 +1,438 @@
 # 第 11 章｜GRPO 与推理模型训练
 
-> **本章定位**：GRPO 是 DeepSeek-R1 的核心算法，是 2024-2026 alignment 方向最重要的进展。本章覆盖：**从 PPO 到 GRPO 的演化**、**完整公式推导**、**过程奖励 PRM**、**DeepSeek-R1 训练全流程**、**推理能力涌现**。这是 DeepSeek 系面试的标志性深度题。
+> **本章定位**：2024–2025 年最重要的后训练进展是**用可验证奖励做大规模强化学习（RLVR）**来训练推理模型。本章推导 GRPO（并指出它的几个偏差）、梳理 DeepSeek-R1 / R1-Zero 的训练流程，然后进入当前最活跃的研究争论：**"顿悟时刻"是 RL 涌现的还是 base 模型本来就有的？RL 到底是扩展了推理能力，还是只是提高了采样效率？** 这些问题都还没有定论，正适合作为研究的切入点。
 
-> **配套章节**：RLHF/PPO → 第 9 章 / DPO → 第 10 章 / DeepSeek 专题 → 第 6 部分前沿热点
+> **配套章节**：PPO / KL / reward hacking → 第 9 章 / DPO → 第 10 章 / SFT 与蒸馏 → 第 7 章 / 推理时扩展与解码 → 第 14 章 / Agent 的多轮 RL → 第 18 章
+
+> **标记约定**：📄 论文结论 / 🧮 可推导 / 💭 直觉或有争议 / ❓ 开放问题
 
 ---
 
 ## 📌 本章导航
 
-| 序号 | 题目 | 难度 | 频率（字节/DeepSeek/Meta/OpenAI） | 类型 |
-|---|---|---|---|---|
-| Q1 | GRPO 是什么？为什么 R1 用它 | ⭐⭐⭐⭐⭐ | 6 / 9 / 4 / 4 | 概念 |
-| Q2 | **GRPO 完整公式推导** | ⭐⭐⭐⭐⭐ | **6 / 10 / 5 / 4** | 杀手题 |
-| Q3 | **为什么去掉 critic 也能 work** | ⭐⭐⭐⭐⭐ | 5 / 8 / 4 / 4 | 深度 |
-| Q4 | PRM vs ORM：过程奖励 vs 结果奖励 | ⭐⭐⭐⭐ | 5 / 7 / 5 / 5 | 概念 |
-| Q5 | **DeepSeek-R1 训练全流程** | ⭐⭐⭐⭐⭐ | **7 / 10 / 4 / 5** | 必问 |
-| Q6 | R1-Zero 与 R1 的区别 | ⭐⭐⭐⭐ | 5 / 8 / 3 / 4 | 深度 |
-| Q7 | 推理能力涌现：Aha Moment 与长 CoT | ⭐⭐⭐⭐ | 4 / 7 / 3 / 5 | 前沿 |
-| Q8 | GRPO 的局限与替代方案 | ⭐⭐⭐ | 3 / 5 / 3 / 3 | 工程 |
+| 序号 | 题目 | 难度 | 类型 |
+|---|---|---|---|
+| Q1 | GRPO 是什么？为什么推理模型用它 | ⭐⭐⭐⭐ | 概念 |
+| Q2 | **GRPO 目标函数推导** | ⭐⭐⭐⭐⭐ | 推导 |
+| Q3 | **为什么不用 critic 也能工作？组基线的理论** | ⭐⭐⭐⭐⭐ | 理论 |
+| Q4 | **GRPO 的偏差与修正：Dr. GRPO、DAPO、GSPO** | ⭐⭐⭐⭐⭐ | 前沿 |
+| Q5 | 结果奖励 vs 过程奖励 | ⭐⭐⭐⭐ | 概念 |
+| Q6 | **DeepSeek-R1 的训练流程** | ⭐⭐⭐⭐⭐ | 必问 |
+| Q7 | R1-Zero 与"顿悟时刻" | ⭐⭐⭐⭐ | 研究 |
+| Q8 | **RL 真的教会了推理吗？** | ⭐⭐⭐⭐⭐ | 研究争论 |
+| Q9 | 工程问题与其他方向 | ⭐⭐⭐⭐ | 工程 + 前沿 |
 
 ---
 
-## Q1：GRPO 是什么？为什么 R1 用它 ⭐⭐⭐⭐⭐
+## Q1：GRPO 是什么？为什么推理模型用它 ⭐⭐⭐⭐
 
 ### 🎯 一句话标答
 
-> GRPO（Group Relative Policy Optimization）= **去掉 critic 的 PPO 变体**——同一 prompt 采样一组响应，**用组内的相对 reward 作为 baseline**，省掉了 value 模型。**显存省、训练稳、推理任务上效果优秀**——是 DeepSeek-R1 的核心算法。
+> 📄 GRPO（Group Relative Policy Optimization，DeepSeekMath, Shao et al. 2024）是去掉价值模型（critic）的 PPO 变体：对同一个问题采样**一组** $G$ 个回答，用组内奖励的**均值和标准差**归一化得到每个回答的优势，这个优势被该回答的所有 token 共享；KL 惩罚直接放在损失中。它特别适合**结果奖励**（例如答案对错）的场景，被 DeepSeek-R1 采用后成为推理模型 RL 的常用基线。
 
 ### 🗣️ 30 秒口语版
 
-"GRPO 是 DeepSeek 在 DeepSeekMath 论文（2024）提出，在 DeepSeek-R1 上大放异彩的强化学习算法。
+"PPO 需要一个和策略差不多大的价值模型来估计每个 token 的基线，显存和工程代价都大，而且在只有最终结果奖励、回答又很长的情况下，价值模型本身很难训好。
 
-**核心思想**：传统 PPO 需要一个 **critic 模型** 估计 V(s)，用于计算 advantage A = Q - V。这增加了显存和工程复杂度。
+GRPO 的做法是：对每个问题采样一组回答，比如 16 或 64 个，用奖励模型或规则给每个回答打分，然后用'减去组内均值、除以组内标准差'作为这个回答的优势，这个回答里所有 token 用同一个优势值，再套用 PPO 的裁剪目标，加一个 KL 惩罚。
 
-GRPO 的 insight——**对同一个 prompt 采样 G 个响应**，用**组内 reward 的均值**作为 baseline，**标准差归一化**作为 advantage。完全省掉 critic。
+对数学、代码这类有可验证答案的任务，奖励就是答案对不对，GRPO 非常自然：同一道题的回答之间互相比较，对的被提高，错的被压低。
 
-具体公式（简化版）：
-- 对 prompt q 采样 G 个响应 o_1, ..., o_G
-- 算每个的 reward r_i（来自 RM 或规则）
-- Advantage: A_i = (r_i - mean(r)) / std(r)
-- 用 PPO 的 clipped objective 优化 policy
+不过 2025 年的研究也发现原始 GRPO 有几个偏差，比如按回答长度归一化会让错误的长回答受到的惩罚更小，按标准差归一化会让简单题和难题的权重失衡，所以后来有 Dr. GRPO、DAPO、GSPO 等修正版本。"
 
-**优势**：
-- **没有 critic 模型** → 省 30%+ 显存
-- **训练更稳** → 没有 critic 偏差累积
-- **推理任务友好** → 同一 prompt 的多采样适合数学/代码这种"答案对就好"的场景
-- **代码简单** → 比 PPO 实现少一个模型一个 loss
+### 🔍 PPO vs GRPO
 
-**为什么 R1 用它**：DeepSeek-R1 训练目标是数学、代码、推理——这些任务有**可验证的 outcome reward**（对就 1，错就 0）。GRPO 的 group sampling 在这种场景下天然适配——多次尝试，对比效果，朝着对的方向优化。
-
-**当前格局**：GRPO 已成为推理模型训练的事实标准。Kimi-K0、Qwen-QwQ、OpenAI o1 据传都用了类似方法。"
-
-### 🔍 GRPO vs PPO 对比
-
-| 维度 | PPO (RLHF) | GRPO |
+| | PPO（RLHF） | GRPO |
 |---|---|---|
-| Critic 模型 | 需要 | **不需要** |
-| Baseline | V(s) 网络估计 | **组内均值** |
-| Advantage 计算 | A = Q - V | **A = (r - mean) / std** |
-| 模型数量 | 4 | **3**（少一个 critic）|
-| 显存压力 | 高 | 中 |
-| 适合任务 | 通用对话 | **推理、数学、代码** |
-| 训练稳定性 | 中 | **高** |
-| 代表模型 | ChatGPT | **DeepSeek-R1** |
+| 基线 | 价值模型 $V_\phi(s_t)$，每个 token 一个 | 同一问题的组内平均奖励，每个回答一个 |
+| 优势 | GAE，按 token | $(r_i - \bar r)/\sigma_r$，按回答共享 |
+| 模型 | 策略、价值、参考、RM | 策略、参考（+ RM 或规则） |
+| KL | 通常放在每 token 奖励里 | 放在损失里，$k_3$ 估计量 |
+| 采样 | 每个 prompt 通常 1 个回答 | 每个 prompt $G$ 个回答 |
 
-### 🔥 高频追问 Top 3
+> ❌ 旧版写"Kimi-K0、Qwen-QwQ、OpenAI o1 据传都用了类似方法"。"Kimi-K0"并不存在（Kimi 的推理模型是 k1.5，使用的是另一种策略优化方法）；o1 的训练方法没有公开。已删除。
 
-**Q：GRPO 适合通用对话吗？**
-
-A：**理论可以，实际优势不明显**。
-
-GRPO 的核心优势——**同一 prompt 多采样 + 组内对比**——在以下场景闪光：
-- **数学/代码**：reward 是 0/1 可验证的
-- **推理任务**：能区分对错
-- **有客观标准**的任务
-
-但通用对话——
-- Reward 是连续值（人类偏好）
-- 同一 prompt 的多次响应可能"都行但风格不同"
-- 没有明显的对错信号
-
-所以 GRPO 用在通用对话上没特别优势，反而 DPO 更简单。**GRPO 是为推理任务量身定制的**。
-
-**Q：GRPO 一定要 outcome reward 吗？过程 reward 行不行？**
-
-A：**两者都可以**。但实际上——
-
-- **Outcome reward**（最终对错）：最常见，规则化简单
-- **Process reward**（每步对错，来自 PRM）：更精细但更贵
-
-DeepSeek-R1 主要用 outcome reward 配合 GRPO，**rule-based**：
-- 数学题：检查最终答案是否匹配
-- 代码：跑测试用例
-- 格式：检查是否符合 `<think>...</think><answer>...</answer>` 模式
-
-**简单的 rule-based outcome reward + GRPO** 居然就能训出强大的推理模型——这是 R1 论文的惊人发现。
-
-**Q：GRPO 的"G"（组大小）怎么定？**
-
-A：典型 **G = 16 到 64**。
-
-- **G 太小**（< 8）：baseline 估计方差大，训练不稳
-- **G 适中**（16-32）：平衡点
-- **G 太大**（> 64）：每步计算量大，性价比下降
-
-DeepSeek 在 R1 论文中用了 G = 64。这意味着每个 prompt 要生成 64 个完整响应才能算一次 GRPO 更新——**rollout 成本巨大**。
-
-### ⚠️ 常见陷阱
-
-1. 不要说 GRPO 是"PPO 的升级"——它是 PPO 的**简化变体**，去掉了 critic
-2. GRPO 适合**有明确 reward 信号**的任务，不是万能
-3. G 是关键超参——和 PPO 的 batch 不同，要单独算
-
-### 🏢 大厂偏好
-
-- **DeepSeek**：必问，是公司的"暗号题"
-- **国内大模型团队**：推理模型方向跟进 GRPO
-- **OpenAI / Anthropic**：会问"o1 怎么训"，可能涉及类似思想
-
-### 📚 延伸阅读
-- [DeepSeekMath 论文](https://arxiv.org/abs/2402.03300) - GRPO 原始提出
-- [DeepSeek-R1 论文](https://arxiv.org/abs/2501.12948) - GRPO 大规模应用
+### 📚 出处
+- Shao et al. *DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models*. 2024. arXiv:2402.03300
+- DeepSeek-AI. *DeepSeek-R1*. 2025. arXiv:2501.12948；Nature 版本 2025-09
 
 ---
 
-## Q2：GRPO 完整公式推导 ⭐⭐⭐⭐⭐（杀手题）
+## Q2：GRPO 目标函数推导 ⭐⭐⭐⭐⭐
 
-### 🎯 一句话标答
+### 🧮 目标函数（DeepSeekMath 原文形式）
 
-> GRPO 目标函数 = **PPO 的 clipped objective + 组内相对 advantage + KL 正则**，关键创新是 `A_i = (r_i - mean(r)) / std(r)` 代替了 PPO 的 GAE。整个 loss 没有 value function。
+对问题 $q$，从 $\pi_{\theta_{old}}$ 采样 $\{o_1,\ldots,o_G\}$：
+$$\mathcal{J}_{GRPO}(\theta) = \mathbb{E}\left[\frac1G\sum_{i=1}^G\frac{1}{|o_i|}\sum_{t=1}^{|o_i|}\Big\{\min\big(\rho_{i,t}\hat A_{i,t},\ \text{clip}(\rho_{i,t},1-\epsilon,1+\epsilon)\hat A_{i,t}\big) - \beta\,\mathbb{D}_{KL}[\pi_\theta\,\|\,\pi_{ref}]\Big\}\right]$$
 
-### 🗣️ 30 秒口语版
+- 概率比：$\rho_{i,t} = \dfrac{\pi_\theta(o_{i,t}\mid q, o_{i,<t})}{\pi_{\theta_{old}}(o_{i,t}\mid q, o_{i,<t})}$
+- **结果监督**下的优势（同一回答的所有 token 共享）：
+$$\hat A_{i,t} = \tilde r_i = \frac{r_i - \text{mean}(\mathbf r)}{\text{std}(\mathbf r)}$$
+- **过程监督**下：每个推理步骤有奖励，先对所有步骤奖励做组内归一化，然后 $\hat A_{i,t}$ 是 token $t$ **之后**所有步骤的归一化奖励之和。
+- KL 的 $k_3$ 估计量（按 token）：
+$$\mathbb{D}_{KL} = \frac{\pi_{ref}(o_{i,t}\mid\cdot)}{\pi_\theta(o_{i,t}\mid\cdot)} - \log\frac{\pi_{ref}(o_{i,t}\mid\cdot)}{\pi_\theta(o_{i,t}\mid\cdot)} - 1$$
 
-"GRPO 的完整公式可以分四步建构——
+### 🧮 为什么用 $k_3$？
 
-**Step 1：从 PPO 出发**
+令 $u = \pi_{ref}(a)/\pi_\theta(a)$，$a\sim\pi_\theta$：
+- $k_1 = -\log u$：$\mathbb{E}[k_1] = \text{KL}(\pi_\theta\,\|\,\pi_{ref})$，无偏，但单个样本可能为负，方差大。
+- $k_3 = (u - 1) - \log u$：因为 $\mathbb{E}_{a\sim\pi_\theta}[u] = 1$，所以 $\mathbb{E}[k_3] = \mathbb{E}[k_1]$，**同样无偏**；并且由 $\log u \le u - 1$，**每个样本都非负**，通常方差更小。
+- 📄 出处：Schulman 的博客 *Approximating KL Divergence*（2020）。
+- 💭 注意：把 $k_3$ 作为**损失项**求梯度，得到的梯度并不等于真正 KL 的梯度；2025 年有多篇工作分析了不同 KL 估计量在"作为奖励"和"作为损失"时的梯度性质。
 
-PPO 的目标（per token）：
-`L^PPO = E[min(r·A, clip(r, 1-ε, 1+ε)·A) - β·KL(π||π_ref)]`
-
-GRPO 保留这个核心结构，但**改变 A 的计算方式**。
-
-**Step 2：Group Sampling**
-
-对每个 prompt q，用 π_old 采样 G 个响应：
-`{o_1, o_2, ..., o_G} ~ π_old(·|q)`
-
-每个 o_i 都是完整的序列。
-
-**Step 3：Group Relative Advantage**
-
-对每个响应 o_i 算 reward r_i（可以来自 RM、规则、或验证器）。
-
-**Advantage 不再依赖 V(s)，而是组内归一化**：
-`A_i = (r_i - mean(r_1, ..., r_G)) / std(r_1, ..., r_G)`
-
-直觉：好于平均的响应 A > 0（被推），差于平均的 A < 0（被抑）。
-
-**Step 4：GRPO Loss**
-
-把组内 advantage 和 PPO 的 clipped objective 结合：
-
-`L^GRPO = E_q E_{o_i~π_old} [1/G · Σ_i (1/|o_i|) · Σ_t L_clip(i,t)]`
-
-其中：
-- L_clip(i,t) 是位置 (i, t) 的 clipped surrogate
-- 1/|o_i| 是按响应长度归一化
-- 1/G 是组内平均
-- KL 项加在 reward 里或直接加到 loss 里
-
-**关键细节**：advantage A_i 对响应 o_i 的所有 token 是**共享的**——同一个响应内每个 token 用同一个 A 值。"
-
-### 📐 完整数学公式
-
-#### GRPO 目标函数
-
-对每个 prompt q，从 $\pi_{\theta_{old}}$ 采样 G 个响应 $\{o_1, ..., o_G\}$，则 GRPO 目标：
-
-$$\mathcal{J}_{GRPO}(\theta) = \mathbb{E}_{q \sim P(Q), \{o_i\}_{i=1}^G \sim \pi_{\theta_{old}}(\cdot|q)} \left[\frac{1}{G} \sum_{i=1}^G \frac{1}{|o_i|} \sum_{t=1}^{|o_i|} \left\{\min[r_{i,t}(\theta) \cdot A_i, \text{clip}(r_{i,t}(\theta), 1-\epsilon, 1+\epsilon) \cdot A_i] - \beta \cdot \mathbb{D}_{KL}(\pi_\theta \| \pi_{ref})\right\}\right]$$
-
-其中：
-
-**Ratio**（per-token，per-response）：
-
-$$r_{i,t}(\theta) = \frac{\pi_\theta(o_{i,t} | q, o_{i,<t})}{\pi_{\theta_{old}}(o_{i,t} | q, o_{i,<t})}$$
-
-**Group Relative Advantage**（per-response，所有 token 共享）：
-
-$$A_i = \frac{r_i - \text{mean}(\{r_1, ..., r_G\})}{\text{std}(\{r_1, ..., r_G\})}$$
-
-其中 $r_i$ 是响应 $o_i$ 的 reward（标量）。
-
-**KL 项**（per-token，approximated）：
-
-$$\mathbb{D}_{KL}(\pi_\theta \| \pi_{ref}) = \frac{\pi_{ref}(o_{i,t} | q, o_{i,<t})}{\pi_\theta(o_{i,t} | q, o_{i,<t})} - \log \frac{\pi_{ref}(o_{i,t} | q, o_{i,<t})}{\pi_\theta(o_{i,t} | q, o_{i,<t})} - 1$$
-
-注意 GRPO 用的是 **unbiased estimator of KL**（k3 estimator），不是简单的 log-ratio。
-
-#### 与 PPO 对比
-
-PPO 的目标（参考）：
-
-$$\mathcal{J}_{PPO}(\theta) = \mathbb{E}_t\left[\min(r_t A_t, \text{clip}(r_t, 1-\epsilon, 1+\epsilon) A_t)\right]$$
-
-with $A_t = $ GAE estimate from value network $V_\phi$.
-
-**核心差异**：
-- PPO 的 $A_t$ 是 per-token，依赖 critic
-- GRPO 的 $A_i$ 是 per-response，依赖 group baseline
-
-### 💻 GRPO 训练伪代码
+### 💻 伪代码
 
 ```python
-def grpo_step(prompts, policy, ref_policy, reward_fn, G=64):
-    losses = []
-    
-    for q in prompts:
-        # 1. Group sampling
-        responses = []
-        old_log_probs_list = []
-        for _ in range(G):
-            with torch.no_grad():
-                o = policy.generate(q)
-                old_log_probs = policy.log_prob(q, o)  # per-token
-            responses.append(o)
-            old_log_probs_list.append(old_log_probs)
-        
-        # 2. Compute rewards (rule-based or RM)
-        rewards = torch.tensor([reward_fn(q, o) for o in responses])
-        
-        # 3. Group relative advantage (per-response, shared by all tokens)
-        mean_r = rewards.mean()
-        std_r = rewards.std() + 1e-8
-        advantages = (rewards - mean_r) / std_r  # shape: (G,)
-        
-        # 4. PPO-style update for each response
-        for i, o in enumerate(responses):
-            A_i = advantages[i]
-            
-            # New log probs (require grad)
-            new_log_probs = policy.log_prob(q, o)
-            ratio = torch.exp(new_log_probs - old_log_probs_list[i])
-            
-            # Clipped surrogate
-            surr1 = ratio * A_i
-            surr2 = torch.clamp(ratio, 1-eps, 1+eps) * A_i
-            policy_loss = -torch.min(surr1, surr2)
-            
-            # KL term (unbiased estimator)
-            ref_log_probs = ref_policy.log_prob(q, o)
-            log_ratio = ref_log_probs - new_log_probs
-            kl = torch.exp(log_ratio) - log_ratio - 1
-            
-            # Per-token loss, normalize by length
-            loss_i = (policy_loss + beta * kl).mean()
-            losses.append(loss_i)
-    
-    # Average over group and prompts
-    total_loss = torch.stack(losses).mean()
-    total_loss.backward()
-    optimizer.step()
+# 对一个 batch 的问题，每个问题采样 G 个回答
+resp = policy.generate(prompts, n=G)                       # (B*G) 个回答
+r = reward_fn(prompts, resp).view(B, G)                    # 规则或 RM
+adv = (r - r.mean(1, keepdim=True)) / (r.std(1, keepdim=True) + 1e-6)
+adv = adv.view(-1, 1)                                      # 每个回答一个，广播到所有 token
+
+logp_old = policy.logprobs(prompts, resp).detach()        # (B*G, T)
+logp_ref = ref.logprobs(prompts, resp).detach()
+mask = response_mask(resp)                                  # (B*G, T)
+
+for _ in range(num_updates):
+    logp = policy.logprobs(prompts, resp)
+    ratio = (logp - logp_old).exp()
+    pg = -torch.min(ratio * adv, ratio.clamp(1 - eps, 1 + eps) * adv)
+    kl = (logp_ref - logp).exp() - (logp_ref - logp) - 1
+    per_tok = pg + beta * kl
+    # 原始 GRPO：先对每个回答的 token 求平均，再对回答求平均（Q4 讨论其偏差）
+    loss = ((per_tok * mask).sum(1) / mask.sum(1)).mean()
+    loss.backward(); opt.step(); opt.zero_grad()
 ```
 
-### 💡 关键设计点解读
+### 🔥 高频追问
 
-**1. Advantage 是 per-response，不是 per-token**
+**Q：组内奖励全相同（全对或全错）会怎样？**
 
-PPO 的 GAE 给每个 token 一个 advantage——因为 critic 估计每个状态的 V(s)。
+A：🧮 优势全为 0（分母加了 $\epsilon$），这一组**不产生任何策略梯度**，只剩 KL 项。训练后期大量题目要么全对要么全错，有效 batch 会显著缩小。📄 DAPO 的"动态采样"就是针对这一点：过采样并丢弃这类组，保持每个 batch 中有梯度的样本数量（Q4）。
 
-GRPO 的 group baseline 是**整个响应的标量 reward**，所以 advantage 也是 per-response 的——**这个 response 的所有 token 共享同一个 A_i**。
+**Q：$G$ 取多少？**
 
-**为什么这样可以？** 因为推理任务的 reward 本来就是 outcome-based（最终对错），各个中间 token 没有独立的 reward 信号。给整个响应一个统一的 advantage 是合理的。
+A：📄 DeepSeekMath 中 GRPO 每个问题采样 64 个回答。DeepSeek-R1 的具体超参数见其 Nature 版本的补充材料。💭 $G$ 越大，基线越准，但相同算力下能覆盖的问题数越少。
 
-**2. 长度归一化 1/|o_i|**
-
-不同响应长度不同——长响应有更多 token，loss 累加会更大。除以 |o_i| 让 **每个响应在 loss 中权重相等**，不被长度主导。
-
-**3. KL 在 loss 而非 reward**
-
-PPO 中 KL 加在 per-token reward 里。GRPO **直接加在 loss 里**——理由是：
-- GRPO 的 reward 是 outcome-based（最后一个 token 给出），中间 token 没有 reward 信号
-- KL 加在 reward 里会和 outcome reward 混在一起，不清晰
-- 加在 loss 里直接、清晰
-
-### 🔥 高频追问 Top 3
-
-**Q：为什么用 (r - mean) / std 而不是 (r - mean)？**
-
-A：**标准化让 advantage 尺度无关**。
-
-- 只用 (r - mean)：advantage 的尺度取决于 reward 本身。比如 reward 都在 [0, 1] vs [0, 100] 会让有效学习率差 100×
-- (r - mean) / std：advantage 总是在合理范围（标准差 1），不依赖 reward 尺度
-
-这种"白化"让 GRPO **对 reward 函数的尺度更鲁棒**——你可以随便定义 reward（0/1 还是 0/100），GRPO 都能稳定训练。
-
-**Q：std 为什么不会让训练变差？比如 reward 都相同时 std=0。**
-
-A：**实现中加了 epsilon**：`std + 1e-8`。
-
-但更重要的是——**如果一个 group 的 reward 都相同，说明这个 prompt 上 policy 没分化，确实不需要更新**。advantages 全是 0 也合理。
-
-实际训练中：
-- 训练初期 group 内 reward 差异大（policy 还在学）→ advantage 显著
-- 训练后期某些 prompt 的 group reward 趋同（policy 学会了）→ advantage 小
-
-这个动态正是 GRPO 想要的——**已学好的 prompt 自动降低权重**。
-
-**Q：GRPO 的 KL 用了 k3 estimator，为什么？**
-
-A：k3 estimator：`KL ≈ ratio - log(ratio) - 1`，其中 ratio = π_ref/π。
-
-它比简单的 `log(π/π_ref)` 好的原因——
-- **两者都是 KL 的无偏估计**，但 k3 **始终非负**（单样本的 log-ratio 有时为负）
-- k3 在小 KL 时**方差更小**
-
-数学上：
-- 标准 KL: `KL(π || π_ref) = E_{a~π}[log(π/π_ref)]`
-- 对单个采样 a 直接算 log(π/π_ref) 本身**无偏**，但方差大、单样本可能为负
-- k3：`E_{a~π}[ratio_ref/π - log(ratio_ref/π) - 1]` **同样无偏，但始终非负、方差更小**
-
-DeepSeek 用 k3 是为了训练稳定性。
-
-### ⚠️ 常见陷阱
-
-1. **要懂 advantage 是 per-response，不是 per-token**
-2. **要懂标准化的重要性**——尺度无关
-3. **KL 在 loss 不在 reward**——和 PPO 不同
-4. **G（group size）是关键超参**——影响计算量
-
-### 🏢 大厂偏好
-
-- **DeepSeek**：必问，要求完整推导
-- **字节大模型团队**：高频追问
-- **国内推理模型团队**：经典题
-
-### 📚 延伸阅读
-- [DeepSeekMath: Pushing the Limits of Mathematical Reasoning](https://arxiv.org/abs/2402.03300) - §4.1 GRPO 详细
-- [DeepSeek-R1 Paper](https://arxiv.org/abs/2501.12948) - GRPO 在 R1 的应用
+> ❌ 旧版把 DeepSeekMath 的 $G=64$ 说成了 DeepSeek-R1 的配置。
 
 ---
 
-## Q3：为什么去掉 critic 也能 work ⭐⭐⭐⭐⭐
+## Q3：为什么不用 critic 也能工作？组基线的理论 ⭐⭐⭐⭐⭐
 
-### 🎯 一句话标答
+### 🧮 基线不改变梯度期望
 
-> 因为 **同一 prompt 的 group sampling 提供了天然的 baseline**——组内均值就是 V(s) 的无偏估计，且**方差更小**（同一上下文消除了 prompt 间差异），所以不需要单独训 critic 也能算出可靠的 advantage。
+对任何不依赖动作的 $b(s)$：
+$$\mathbb{E}_{a\sim\pi}\left[\nabla_\theta\log\pi_\theta(a\mid s)\,b(s)\right] = b(s)\sum_a\nabla_\theta\pi_\theta(a\mid s) = b(s)\,\nabla_\theta\sum_a\pi_\theta(a\mid s) = 0$$
+所以减去基线不改变期望，只改变方差。
 
-### 🗣️ 30 秒口语版
+### 🧮 组均值是 $V(q)$ 的蒙特卡洛估计
 
-"这是个深度题，能答好显示你真懂强化学习的 baseline 原理。
+在结果奖励的设定下，整段回答可以看作一个"动作"，$V_{\pi_{old}}(q) = \mathbb{E}_{o\sim\pi_{old}}[r(q,o)]$，组均值 $\bar r = \frac1G\sum_j r_j$ 是它的蒙特卡洛估计。LLM 的特殊之处在于**同一个问题可以低成本地重复采样**，所以可以直接用样本均值代替学习出来的价值函数。
 
-**回顾 actor-critic**：
+### 🧮 但组均值作为基线是有偏的
 
-PPO 用 critic V_φ 学习 V(s)，作为 baseline 计算 advantage：
-`A_t = Q(s_t, a_t) - V_φ(s_t)`
+$\bar r$ 包含了 $r_i$ 本身，因此**基线依赖于动作 $o_i$**，严格来说违反了上面"基线不依赖动作"的条件。
+- 🧮 **留一法（Leave-One-Out）**基线 $b_i = \frac{1}{G-1}\sum_{j\ne i}r_j$ 不依赖 $o_i$，是无偏的。并且 $r_i - b_i = \frac{G}{G-1}(r_i - \bar r)$，与"减组均值"只差一个常数因子。
+- 📄 这个想法并不新：Kool et al. 2019（*Buy 4 REINFORCE Samples, Get a Baseline for Free!*）在组合优化中提出了这种多样本基线；📄 Ahmadian et al., ACL 2024（Cohere, *Back to Basics: Revisiting REINFORCE Style Optimization for Learning from Human Feedback in LLMs*）提出 **RLOO**，在 RLHF 中用留一法 REINFORCE 取得了比 PPO 更好的效果，并指出 LLM 的 RLHF 中 PPO 的很多复杂组件并非必要。
+- 🧮 **除以标准差**则会改变不同问题之间的相对权重（Q4）。
 
-**为什么要 baseline**？方差减少。Policy gradient 的方差大，减去一个不依赖动作的 baseline 不改变梯度期望但显著降方差。
+> ❌ 旧版写"之前没人这么做，因为传统 RL 难以对同一状态多次采样""组内均值是无偏的"，两者都不准确。
 
-**GRPO 的洞察**：
+### 🔍 critic 真的没用吗？
 
-对于同一个 prompt q，采样 G 个响应。每个响应对应一个 reward r_i。**这 G 个 reward 共享同一个上下文 q**——它们的差异完全来自动作（不同响应），不来自状态（prompt 是同一个）。
+📄 **VAPO**（ByteDance Seed 2025）是基于价值模型的方法，通过价值预训练、解耦的 GAE（策略和价值使用不同的 $\lambda$）、长度自适应的 GAE 等技术，在 AIME 2024 上超过了 DAPO 等无 critic 方法。💭 所以"去掉 critic"是一个工程上的权衡（简单、省显存），而不是理论上更优；在长思维链中做精细的 token 级信用分配，仍然是价值方法的潜在优势。
 
-所以：
-`mean(r_1, ..., r_G) ≈ E[r | q] = V(q)`
+> ❌ 旧版写"GRPO + critic 实践中没有显著收益"，与 VAPO 等工作的结论不符。
 
-**组内均值就是 V(q) 的蒙特卡洛估计**！而且：
-
-**优势 1：无偏**
-
-只要 G 足够大，mean 是 V 的无偏估计。
-
-**优势 2：方差小**
-
-V_φ 学习时受所有 (q, a) 影响——不同 prompt 之间互相干扰。组内均值**只基于这个 prompt** 的样本，**自然解耦**。
-
-**优势 3：免训练**
-
-V_φ 是个需要训练的模型，会犯错。组内均值是直接计算，没有训练偏差。
-
-**优势 4：省显存**
-
-V 模型和 policy 同规模——去掉省 30%+ 显存。
-
-**为什么之前没人这么做**？因为传统 RL 任务里——
-- 不同 trajectory 起始状态不同（如 Atari 游戏的随机初始）
-- 难以保证同一状态多次采样
-
-LLM RLHF 的特殊性——**同一 prompt 可以无限次重采样**，恰好满足 group sampling 的前提。这是 LLM-RL 独有的优势。
-
-GRPO 把这个独特优势利用起来，绕过了 critic。"
-
-### 📐 数学分析
-
-#### Policy Gradient 中 baseline 的作用
-
-策略梯度：
-
-$$\nabla_\theta J(\theta) = \mathbb{E}_\tau \left[\sum_t \nabla_\theta \log \pi(a_t|s_t) \cdot Q(s_t, a_t)\right]$$
-
-**关键引理**：减去任意不依赖 $a_t$ 的 baseline $b(s_t)$ 不改变期望：
-
-$$\nabla_\theta J(\theta) = \mathbb{E}_\tau \left[\sum_t \nabla_\theta \log \pi(a_t|s_t) \cdot (Q(s_t, a_t) - b(s_t))\right]$$
-
-证明思路：
-$$\mathbb{E}_{a \sim \pi}[\nabla \log \pi(a|s) \cdot b(s)] = b(s) \cdot \mathbb{E}_{a \sim \pi}[\nabla \log \pi(a|s)] = b(s) \cdot 0 = 0$$
-
-（因为 $\sum_a \pi(a|s) = 1$，导数为 0。）
-
-#### 最优 baseline
-
-最优 baseline 是**让 advantage 方差最小**的那个，理论上：
-
-$$b^*(s) = \frac{\mathbb{E}_a[Q(s,a) \cdot (\nabla \log \pi(a|s))^2]}{\mathbb{E}_a[(\nabla \log \pi(a|s))^2]}$$
-
-实践中近似为 $V(s) = \mathbb{E}_{a \sim \pi}[Q(s, a)]$，因为它简单且方差减少效果接近最优。
-
-#### GRPO 的 baseline 选择
-
-GRPO 选 baseline = $\text{mean}(\{r_i\}_{i=1}^G)$，即组内均值。
-
-**它和 V(s) 的关系**：
-
-$$\text{mean}(\{r_i\}) = \frac{1}{G} \sum_{i=1}^G r(q, o_i) \xrightarrow{G \to \infty} \mathbb{E}_{o \sim \pi_{old}}[r(q, o)] = V_{\pi_{old}}(q)$$
-
-所以**组内均值是 $V_{\pi_{old}}(q)$ 的 Monte Carlo 估计**。当 G 足够大时近似 V(q)。
-
-#### 为什么不学 critic 更好
-
-学一个 critic V_φ 有 **两个误差来源**：
-1. **训练误差**：V_φ 估计不准（尤其训练初期）
-2. **分布偏移**：V_φ 在历史数据上训，可能 generalize 不到新状态
-
-组内均值没有这些问题——它是**当前 policy 下的直接采样估计**。
-
-**代价**：需要采样 G 次，rollout 成本是 PPO 的 G 倍（但 PPO 只需要 1 次）。
-
-### 🔍 GRPO vs PPO 的 trade-off
-
-| 维度 | PPO (with critic) | GRPO (no critic) |
-|---|---|---|
-| Baseline 来源 | V_φ 网络 | 组内均值 |
-| Baseline 无偏性 | 训练时有偏 | **无偏**（MC 估计）|
-| Rollout 成本 | 1× | G×（G=64 则贵 64 倍）|
-| 显存 | 高（有 critic）| 中（无 critic）|
-| 工程复杂度 | 高 | 中 |
-| 适用任务 | 通用 | 推理（reward 简单）|
-
-### 🔥 高频追问 Top 3
-
-**Q：G=1 时 GRPO 变成什么？**
-
-A：**没有意义**——只有 1 个样本时，mean(r) = r，std=0，advantage = 0/0 未定义。
-
-实际上 GRPO 要求 G ≥ 2 才有意义。
-
-**更深层**：G 太小时 baseline 估计方差极大，GRPO 退化成无 baseline 的 REINFORCE，训练不稳。
-
-经验：**G ≥ 8 才有意义，G = 16-64 是 sweet spot**。
-
-**Q：GRPO 的 rollout 成本是 PPO 的 G 倍，为什么还划算？**
-
-A：表面看是 G 倍，但有几个抵消因素——
-
-- **批处理**：G 个响应可以**并行生成**（batch inference），实际墙钟时间不是 G 倍
-- **省显存**：不用 critic，可以用更大的 batch 或更大的 base model
-- **训练步数少**：组内多样本提供更可靠 gradient，**每步学到的更多**，总训练步数减少
-- **稳定性**：更稳定意味着不需要回滚、调参成本低
-
-实际工业经验——**GRPO 的总训练成本比 PPO 略高，但效果好且工程友好**。对推理任务来说值得。
-
-**Q：能不能 GRPO + critic 一起用？**
-
-A：可以——这是个研究方向。
-
-思路：
-- Critic 提供 per-token V(s)
-- 组内均值提供 per-response baseline
-- 两者结合，advantage 更精细
-
-但实践中**没有显著收益**——增加了 critic 的复杂度，但 GRPO 单独已经足够好。所以纯 GRPO 仍是主流。
-
-### ⚠️ 常见陷阱
-
-1. 不要说"组内均值是个 trick"——它有严格的理论基础
-2. 要懂 baseline 不改变梯度期望但降方差的原理
-3. G=1 时 GRPO 没意义
-
-### 🏢 大厂偏好
-
-- **DeepSeek**：必问
-- **强化学习方向研究岗**：会从理论角度深入
+### 📚 出处
+- Kool et al. ICLR 2019 Workshop（DeepRLStructPred）
+- Ahmadian et al. ACL 2024. arXiv:2402.14740
+- Yue et al. *VAPO*. 2025. arXiv:2504.05118
 
 ---
 
-## Q4：PRM vs ORM：过程奖励 vs 结果奖励 ⭐⭐⭐⭐
+## Q4：GRPO 的偏差与修正：Dr. GRPO、DAPO、GSPO ⭐⭐⭐⭐⭐
+
+### 偏差 1：按回答长度归一化 → 偏好更长的错误回答
+
+🧮 原始 GRPO 对每个回答先按 token 数 $|o_i|$ 取平均。对于优势为负的（错误）回答，每个 token 分到的惩罚是 $\hat A_i/|o_i|$，**回答越长，每个 token 受到的惩罚越小**；对于正确回答，越短的回答每个 token 得到的奖励越大。结果是：正确回答倾向于变短，**错误回答倾向于变长**。
+
+📄 **Dr. GRPO**（Liu et al. 2025, *Understanding R1-Zero-Like Training: A Critical Perspective*）指出了这个偏差，以及下一个偏差，并提出去掉这两项归一化。他们报告：修正后在保持推理性能的同时提高了 token 效率；用一个 7B base 模型的最小化配方在 AIME 2024 上达到 43.3%。
+
+### 偏差 2：按标准差归一化 → 问题难度偏差
+
+🧮 对于几乎全对或几乎全错的问题，组内标准差很小，除以它会把优势放大；奖励差异大的问题反而被缩小。这使得**过于简单和过于困难的问题获得了更大的权重**。Dr. GRPO 去掉了标准差归一化（只减均值）。
+
+### DAPO：四项改进
+
+📄 **DAPO**（Yu et al., ByteDance Seed & 清华 AIR, NeurIPS 2025）：作者发现朴素 GRPO 在 Qwen2.5-32B 上只能达到 AIME 约 30 分，原因包括熵坍塌、奖励噪声和训练不稳定。改进如下：
+
+| 技术 | 做法 | 解决的问题 |
+|---|---|---|
+| **Clip-Higher** | 上下裁剪边界解耦（如 $\epsilon_{low}=0.2,\ \epsilon_{high}=0.28$） | 低概率 token 难以被提高 → 熵坍塌、探索不足 |
+| **动态采样** | 过采样并过滤掉准确率为 0 或 1 的问题组 | 有效梯度样本减少 |
+| **Token 级损失** | 对 batch 中所有 token 求平均，而不是先在回答内平均 | 长回答中每个 token 的权重过低（偏差 1） |
+| **超长奖励塑形** | 对被截断的回答使用软惩罚，或直接过滤 | 截断导致的奖励噪声 |
+
+另外 DAPO **去掉了 KL 惩罚**，理由是长思维链 RL 中策略本来就应该大幅偏离初始模型。📄 结果：基于 Qwen2.5-32B base 在 AIME 2024 上达到 50 分，超过 DeepSeek-R1-Zero-Qwen-32B 的 47 分，训练步数只用了一半；代码基于 veRL 开源。
+
+### GSPO：序列级的重要性比
+
+📄 **GSPO**（Zheng et al. 2025, Qwen 团队, *Group Sequence Policy Optimization*）认为 GRPO 的不稳定来自**重要性采样权重的误用**：奖励是对整个序列给的，却在每个 token 上计算概率比，这引入的高方差噪声会随回答长度累积，并被裁剪放大，可能导致模型崩溃。GSPO 用**序列似然**定义重要性比（并按长度做几何平均）：
+$$s_i(\theta) = \left(\frac{\pi_\theta(o_i\mid q)}{\pi_{\theta_{old}}(o_i\mid q)}\right)^{1/|o_i|}$$
+并在**序列级**做裁剪。📄 论文报告 GSPO 显著稳定了 **MoE 模型**的 RL 训练（不再需要"路由回放"等额外技巧），并用于 Qwen3 的训练。
+
+### 🔍 小结
+
+| 方法 | 修改点 |
+|---|---|
+| GRPO | 组内均值 + 标准差归一化；回答内平均；token 级比；KL 放在损失里 |
+| Dr. GRPO | 去掉长度归一化和标准差归一化 |
+| DAPO | Clip-Higher、动态采样、token 级损失、超长塑形、去掉 KL |
+| GSPO | 序列级重要性比与裁剪 |
+| RLOO | 留一法基线的 REINFORCE |
+| REINFORCE++ | 用全局（batch 级）优势归一化代替组内归一化，并保留 PPO 的部分技巧 |
+
+### 📚 出处
+- Liu et al. *Understanding R1-Zero-Like Training: A Critical Perspective*. 2025. arXiv:2503.20783
+- Yu et al. *DAPO: An Open-Source LLM Reinforcement Learning System at Scale*. NeurIPS 2025. arXiv:2503.14476
+- Zheng et al. *Group Sequence Policy Optimization*. 2025. arXiv:2507.18071
+- Hu. *REINFORCE++*. 2025. arXiv:2501.03262
+
+---
+
+## Q5：结果奖励 vs 过程奖励 ⭐⭐⭐⭐
 
 ### 🎯 一句话标答
 
-> **ORM**（Outcome Reward Model）只看最终答案对错——简单但稀疏；**PRM**（Process Reward Model）给每个推理步骤打分——精细但贵。**ORM 更工程友好**，**PRM 理论更优**。R1 主要用 ORM，DeepSeek-Math 探索过 PRM。
+> 结果奖励（ORM / 规则）只评判最终答案，过程奖励（PRM）评判每个推理步骤。📄 DeepSeek-R1 **只使用基于规则的结果奖励**（准确性 + 格式，后来加了语言一致性），并在"不成功的尝试"一节中解释了为什么没有使用 PRM。
 
-### 🗣️ 30 秒口语版
+### 📄 R1 对 PRM 的判断
 
-"两种 reward 模型反映了**对推理任务的两种思路**——
+DeepSeek-R1 论文列出了 PRM 在大规模 RL 中的三个问题：
+1. 在一般推理中，**很难明确定义细粒度的"步骤"**。
+2. **很难判断中间步骤是否正确**：自动标注效果不好，人工标注无法扩展。
+3. 一旦引入基于模型的 PRM，就不可避免地出现 **reward hacking**，并且重新训练 RM 需要额外资源，使训练流程复杂化。
 
-**ORM（结果奖励）**：
-- 输入：(prompt, complete_response)
-- 输出：标量分数，反映最终答案的好坏
-- 训练数据：(prompt, response, correct/wrong)
+他们的结论是：PRM 在对模型生成的 top-N 回答做重排序或引导搜索时有用，但在大规模 RL 中，其收益相比额外的计算开销有限。论文中同样列为"不成功尝试"的还有 **MCTS**。
 
-**PRM（过程奖励）**：
-- 输入：(prompt, response, step_k)
-- 输出：第 k 步的分数（这一步推理是否正确）
-- 训练数据：(prompt, response with steps, step-level annotations)
+### 📄 PRM 的数据来源
 
-**ORM 的优劣**：
+| 方法 | 说明 |
+|---|---|
+| 人工步骤标注 | 📄 PRM800K（Lightman et al. 2023）：约 80 万条针对 GPT-4 生成的 MATH 解答的步骤级人工标注 |
+| 蒙特卡洛估计 | 📄 Math-Shepherd（Wang et al., ACL 2024）：从某一步出发多次补全，用最终答对的比例作为这一步的标签，无需人工；DeepSeekMath 用它做了过程监督的 GRPO 实验 |
+| LLM 评判 | 用强模型判断每一步是否正确 |
 
-优势：
-- 训练数据容易获取（只需要最终答案对错）
-- 实现简单，工程友好
-- DeepSeek-R1 主要用 ORM
-
-劣势：
-- Reward 稀疏（推理 100 步只在末尾给信号）
-- 学不会"哪一步错了"
-- 对长推理任务不利
-
-**PRM 的优劣**：
-
-优势：
-- 信号密集，每步都有反馈
-- 能指出错误的具体位置
-- 理论上更适合长 CoT
-
-劣势：
-- 标注极贵（需要专家标每一步）
-- 训练复杂
-- Reward Hacking 可能（模型学会'看起来正确'的步骤）
-
-**实际选择**：
-- DeepSeek-Math：PRM 探索
-- DeepSeek-R1：ORM + rule-based（最终答案正确性 + 格式正确性）
-- OpenAI o1：据传也用 PRM
-- 工业主流：以 ORM 为主，PRM 作为补充"
-
-### 🔍 ORM 与 PRM 详细对比
-
-| 维度 | ORM | PRM |
-|---|---|---|
-| 监督粒度 | 整个响应 | 每个推理步骤 |
-| 标注成本 | 低（最终答案） | 极高（步级专家标注）|
-| 训练数据规模 | 容易做大 | 难以做大 |
-| Reward 稀疏性 | 稀疏（只末尾） | 密集（每步） |
-| 适合任务 | 数学/代码（答案可验证） | 复杂多步推理 |
-| Reward Hacking | 较少 | 较多（"装作对"） |
-| 工程复杂度 | 低 | 高 |
-| 代表用例 | DeepSeek-R1 | DeepSeek-Math, o1（传） |
-
-### 💡 Rule-based ORM 的简洁
-
-DeepSeek-R1 的 ORM 极其简单——
+### 💡 规则奖励示例
 
 ```python
-def deepseek_r1_reward(prompt, response):
-    # 1. 格式 reward
-    format_correct = check_format(response)  # 检查 <think>...</think><answer>...</answer>
-    
-    # 2. 准确性 reward
-    if is_math_problem(prompt):
-        predicted_answer = extract_answer(response)
-        correct_answer = ground_truth[prompt]
-        accuracy = (predicted_answer == correct_answer)
-    elif is_code_problem(prompt):
-        accuracy = run_test_cases(response)
-    
-    # 组合
-    return alpha * format_correct + beta * accuracy
+def r1_style_reward(question, response, gt_answer):
+    fmt = 1.0 if re.fullmatch(r"(?s)<think>.*</think>.*", response.strip()) else 0.0
+    pred = extract_final_answer(response)          # 例如取 \boxed{} 中的内容
+    acc = 1.0 if math_equal(pred, gt_answer) else 0.0
+    return acc + 0.1 * fmt                          # 权重仅为示意
 ```
 
-完全 rule-based，**不需要训 RM**。
+💭 规则奖励也会被利用：例如答案抽取规则不严格时，模型可能输出多个候选答案"碰运气"；数学等价判断（如 $\frac12$ 与 $0.5$）的实现质量会直接影响训练。
 
-为什么 work？因为对**数学/代码这类有客观正确性的任务**，规则比 RM 更可靠。RM 可能犯错（数学题答对但 RM 给低分），规则不会。
+> ❌ 旧版写"OpenAI o1 据传用了 PRM""一道题标注 5–10 美元"，没有可靠来源，已删除。
 
-这也是为什么 GRPO + Rule-based ORM 在 DeepSeek-R1 上效果惊人——**绕开了 RM 的所有问题**（标注、训练、reward hacking）。
-
-### 🔥 高频追问 Top 3
-
-**Q：PRM 的标注怎么做？**
-
-A：典型方法——
-
-**人工标注（金标准）**：
-- 给标注者看数学题的解答步骤
-- 每步标 "correct / incorrect / neutral"
-- 极贵：一道题可能 5-10 美元
-
-**自动标注（PRM800K 等数据集）**：
-- 用 OpenAI 的 PRM800K 数据集（800K 步级标注）
-- 数据来源是 GPT-4 + 人工筛选
-
-**Monte Carlo 标注**：
-- 从某步开始让 LLM 继续推理 N 次
-- 看完成正确答案的比例 → 这步的 reward
-- DeepSeek-Math 用过这种方法
-
-**Q：PRM 的 reward hacking 怎么应对？**
-
-A：PRM 的 reward hacking 比 ORM 严重——
-
-典型 hack：
-- 模型输出"看起来合理但实际无意义"的步骤
-- 每步在 PRM 上得高分，但整体推理跑偏
-
-应对：
-- **组合 PRM + ORM**：PRM 提供密集信号，ORM 作为最终检验
-- **PRM ensemble**：多个 PRM 投票，降低单一漏洞
-- **定期重训 PRM**：跟上 policy 的演化
-
-但 reward hacking 是 PRM 的根本困难，没有完美解决。
-
-**Q：R1 完全没用 PRM 吗？**
-
-A：**主要用 ORM**，但 R1 论文也提到 PRM 是个探索方向。
-
-DeepSeek 的判断——
-- ORM + rule-based 在数学/代码上已经够强
-- PRM 的训练成本和 hacking 风险大于收益
-- R1 选择了"简单可靠"的 ORM 路线
-
-但对**逻辑推理、复杂规划**等任务，PRM 可能更有价值。这是开放问题。
-
-### ⚠️ 常见陷阱
-
-1. 不要把 PRM 神化——工业上 ORM 更主流
-2. Rule-based reward 不丢人——R1 证明了它的强大
-3. PRM 的 hacking 比 ORM 严重
-
-### 🏢 大厂偏好
-
-- **DeepSeek**：会问 ORM 设计细节
-- **OpenAI 系**：会问 PRM 的工程实现
-
-### 📚 延伸阅读
-- [Let's Verify Step by Step](https://arxiv.org/abs/2305.20050) - OpenAI 的 PRM 工作
-- [PRM800K Dataset](https://github.com/openai/prm800k)
+### 📚 出处
+- Lightman et al. *Let's Verify Step by Step*. ICLR 2024. arXiv:2305.20050
+- Wang et al. *Math-Shepherd*. ACL 2024. arXiv:2312.08935
+- DeepSeek-AI. *DeepSeek-R1*（§4.2 Unsuccessful Attempts）
 
 ---
 
-## Q5：DeepSeek-R1 训练全流程 ⭐⭐⭐⭐⭐（必问）
+## Q6：DeepSeek-R1 的训练流程 ⭐⭐⭐⭐⭐
 
 ### 🎯 一句话标答
 
-> R1 的训练是**四阶段管道**：①**Cold Start**（少量长 CoT SFT）→ ②**Reasoning RL**（GRPO + 规则 reward）→ ③**Rejection Sampling SFT**（用 RL 结果生成 SFT 数据 + 通用数据）→ ④**Final RL**（覆盖推理 + 通用对齐）。
+> 📄 R1 的流程：①**冷启动 SFT**（数千条可读的长思维链数据）→ ②**面向推理的 RL**（GRPO + 准确性 / 格式奖励 + **语言一致性奖励**）→ ③**拒绝采样 + SFT**（约 60 万条推理数据 + 约 20 万条非推理数据，**从 DeepSeek-V3-Base 重新微调**）→ ④**全场景 RL**（推理任务用规则奖励，通用任务用有用性 / 无害性 RM）。
 
-### 🗣️ 30 秒口语版
-
-"R1 训练流程是 DeepSeek 论文的核心贡献，必须能完整讲清。
-
-**前提：R1-Zero 与 R1 的关系**
-
-- **R1-Zero**：从 base model 直接 RL，**没有 SFT**——证明 RL 单独能产生推理能力，但语言混乱
-- **R1**：在 R1-Zero 基础上加 SFT 修复语言问题——是工业可用版本
-
-**R1 的四阶段管道**：
-
-**阶段 1：Cold Start（小量 SFT）**
-- 准备**几千条**高质量长 CoT 数据
-- 数据来源：人工 + R1-Zero 的输出 + few-shot prompt 生成
-- 用这些数据 SFT base model
-- 目的：让模型先有**基本的 CoT 格式和语言能力**
-
-**阶段 2：Reasoning RL（GRPO + 规则 reward）**
-- 在 Cold Start 模型上做 GRPO
-- Reward = 数学答案正确性 + 格式正确性（rule-based）
-- 训练数据：数学、代码、逻辑题
-- 这一步让模型**学会复杂推理**，CoT 越来越长，出现 'aha moment'
-
-**阶段 3：Rejection Sampling + 综合 SFT**
-- 用阶段 2 的 RL 模型生成大量响应
-- **Rejection sampling**：用规则筛选出正确的高质量响应
-- 加上**通用对话数据**（写作、知识问答、安全等）
-- 在 base model 上重新 SFT（约 80 万条数据）
-
-**阶段 4：Final RL（全场景）**
-- 再做一次 RL，覆盖**所有场景**：
-  - 推理：rule-based reward（保持准确性）
-  - 通用：reward model（保持对齐）
-- 让模型在保持推理能力的同时具备通用对话能力
-
-**最终产物**：DeepSeek-R1 既能解奥数题，又能正常对话写代码——**通才推理模型**。"
-
-### 📊 完整流程图
+### 📐 流程
 
 ```
-Base Model (DeepSeek-V3-Base)
-        │
-        ▼
-┌──────────────────────────────────┐
-│  阶段 1: Cold Start SFT          │
-│  · 数据: 几千条长 CoT            │
-│  · 目的: 学基本 CoT 格式         │
-└──────────────────────────────────┘
-        │
-        ▼
-┌──────────────────────────────────┐
-│  阶段 2: Reasoning RL (GRPO)     │
-│  · 数据: 数学/代码/逻辑          │
-│  · Reward: 答案正确性 + 格式     │
-│  · 涌现: 长 CoT, aha moment      │
-└──────────────────────────────────┘
-        │
-        ▼
-   生成大量响应 → Rejection Sampling
-        │
-        ▼  60w 推理数据 + 20w 通用数据
-┌──────────────────────────────────┐
-│  阶段 3: 综合 SFT (from base)    │
-│  · 数据: 80w 条混合              │
-│  · 重新从 base model SFT         │
-└──────────────────────────────────┘
-        │
-        ▼
-┌──────────────────────────────────┐
-│  阶段 4: Final RL (全场景)       │
-│  · 推理: rule-based reward       │
-│  · 通用: reward model            │
-│  · 安全对齐                       │
-└──────────────────────────────────┘
-        │
-        ▼
-   DeepSeek-R1 (最终模型)
+DeepSeek-V3-Base
+  │ ① 冷启动 SFT：数千条长 CoT（few-shot 长 CoT 提示、让模型生成带反思验证的详细答案、
+  │                整理 R1-Zero 的可读输出、人工后处理）
+  ▼
+  │ ② 推理 RL：GRPO；奖励 = 准确性 + 格式 + 语言一致性（思维链中目标语言词的比例）
+  ▼
+  │ ③ 拒绝采样：从 ② 的模型采样，只保留正确、可读的回答（约 60 万条）
+  │    + 非推理数据（写作、事实问答、自我认知、翻译等，复用 DeepSeek-V3 的 SFT 数据，约 20 万条）
+  │    → 在 DeepSeek-V3-Base 上重新做 SFT（约 80 万条，2 个 epoch）
+  ▼
+  │ ④ 全场景 RL：推理用规则奖励；通用用 RM
+  │    有用性 RM 只评估最终总结部分；无害性 RM 评估完整回答（含思考过程）
+  ▼
+DeepSeek-R1
 ```
 
-### 💡 流程设计的关键洞察
+### 💡 关键设计
 
-**为什么需要 Cold Start？**
-- R1-Zero 证明纯 RL 能涌现推理能力，但输出**语言混乱**（中英混杂、可读性差）
-- 一点点 SFT 数据就能修复——让 RL 有个"良好的语言起点"
+- **为什么要冷启动？** R1-Zero 的输出存在可读性差、语言混杂等问题；少量高质量长思维链让 RL 有一个更好的起点，并且论文认为这样训练得更好。
+- **语言一致性奖励的代价**：📄 论文的消融显示，这个奖励会让推理性能**略有下降**，但输出更符合人类偏好，所以仍然保留。
+- **为什么阶段 ③ 从 base 重新训练？** 用阶段 ② 的强推理模型生成数据，再和通用数据混合，在 base 上做一次干净的 SFT，同时获得推理和通用能力。
 
-**为什么阶段 3 要重新从 base SFT？**
-- 阶段 2 的 RL 模型在推理上很强，但**通用能力退化**（语言、对话）
-- 用其生成的高质量推理数据 + 通用数据，在 base 上重新 SFT——**重新平衡能力**
+### 📄 成本
 
-**为什么阶段 4 还要 RL？**
-- SFT 只能"模仿"已知模式
-- Final RL 让模型在所有场景上**继续超越人类标注水平**
-- 同时巩固推理能力 + 对齐通用偏好
+- 📄 DeepSeek-V3 报告：最终一次预训练（加上上下文扩展和后训练）约 278.8 万 H800 GPU 小时，按每小时 2 美元计约 **557.6 万美元**。报告明确说明这**不包括**此前的研究和消融实验成本。
+- 📄 DeepSeek-R1 的 Nature 版本（2025 年 9 月）在补充材料中披露：在 V3-Base 基础上训练 R1 的成本约 **29.4 万美元**。
 
-**精髓**：**RL + SFT 交替**——每个阶段解决一个问题，最终融合所有能力。
+> ❌ 旧版写"R1 总训练成本约 600 万美元（包含 base 预训练）"，把 V3 的数字当成了 R1 的，并且忽略了"不含研发成本"的说明。
 
-### 🔥 高频追问 Top 3
+### 🔥 高频追问
 
-**Q：R1 一共训练了多少 token？多少卡？**
+**Q：小模型怎么获得推理能力？**
 
-A：DeepSeek 没有完全公开，但根据论文披露——
-- **Base model（V3-Base）**：14.8T token 预训练
-- **R1 训练**：相对较短，但 RL 阶段 rollout 成本高
-- **总训练成本**：约 600 万美元（包含 base 预训练）——比 GPT-4 估算的 1 亿美元便宜得多
+A：📄 R1 论文用 R1 生成的约 80 万条数据**蒸馏**了 Qwen2.5 和 Llama 系列（1.5B–70B）。他们还对比了在 Qwen-32B-Base 上直接做大规模 RL 的结果，发现其效果约等于 QwQ-32B-Preview，而蒸馏得到的模型明显更强。结论是：**对小模型，蒸馏比直接 RL 更经济有效**；但要突破现有能力的边界，可能仍需要更强的 base 模型和大规模 RL。
 
-显卡：约 2048 张 H800。
+**Q：社区复现有哪些？**
 
-**Q：阶段 2 的 RL 训练能直接出强模型，为什么还需要阶段 3-4？**
+A：Open-R1（HuggingFace）、TinyZero、SimpleRL-Zoo（Zeng et al. 2025，系统研究了不同 base 模型上的 zero-RL）、Open-Reasoner-Zero、DAPO 等。
 
-A：阶段 2 后的模型在**纯推理 benchmark**（AIME、MATH 等）上已经很强，但有几个问题：
-- **语言能力退化**：在数学题上突出，但日常对话变差
-- **格式不通用**：只擅长 `<think>...</think>` 格式
-- **安全对齐不足**：可能输出有害内容
-
-阶段 3-4 是为了**把推理能力嫁接到通用基座上**，让 R1 成为"既能解奥数又能聊天写代码"的通才。
-
-**Q：能不能复现 R1？**
-
-A：可以——这是 2025 年开源社区的热门方向。
-
-复现要点：
-- **Base model**：用 LLaMA-3.1 70B 或 Qwen2.5 等强 base
-- **SFT 数据**：可以用 DeepSeek-R1 蒸馏（公开 R1 输出）
-- **GRPO 实现**：HuggingFace TRL 库已经支持
-- **算力**：8 卡 A100/H100 + 几周训练
-
-已经有不少社区项目：Open-R1、TinyZero、SimpleRL-Zoo 等。
-
-**门槛**：数据 + 算力 + 调参经验。不是不可能，但需要工程能力。
-
-### ⚠️ 常见陷阱
-
-1. **R1 不是一阶段训出来的**——是四阶段管道
-2. **Cold Start 数据量很小**（几千条）——很多人以为是大规模 SFT
-3. **阶段 3 从 base 重新 SFT**——不是在 RL 模型上继续
-
-### 🏢 大厂偏好
-
-- **DeepSeek 系**：必问，要求详细到每个阶段的数据来源
-- **国内大模型团队**：复现 R1 是热门方向
-
-### 📚 延伸阅读
-- [DeepSeek-R1 论文](https://arxiv.org/abs/2501.12948) - 必读
-- [Open-R1](https://github.com/huggingface/open-r1) - 开源复现
+### 📚 出处
+- DeepSeek-AI. *DeepSeek-R1*. arXiv:2501.12948；Guo et al. Nature (2025)
+- DeepSeek-AI. *DeepSeek-V3 Technical Report*. arXiv:2412.19437
+- Zeng et al. *SimpleRL-Zoo*. 2025. arXiv:2503.18892
 
 ---
 
-## Q6：R1-Zero 与 R1 的区别 ⭐⭐⭐⭐
+## Q7：R1-Zero 与"顿悟时刻" ⭐⭐⭐⭐
 
 ### 🎯 一句话标答
 
-> **R1-Zero**：从 base 直接 RL，**没有任何 SFT**——证明 RL 单独能涌现推理能力，但语言混乱；**R1**：在 R1-Zero 基础上加 SFT 修复语言问题，是工业可用版本。**R1-Zero 是科学发现，R1 是工程产品**。
+> 📄 R1-Zero 直接在 DeepSeek-V3-Base 上做 GRPO，不经过 SFT，只用规则奖励。AIME 2024 的 pass@1 从 15.6% 提升到 71.0%（多数投票 86.7%），与 OpenAI-o1-0912 相当；回答长度在训练中自然增长，并出现了被作者称为"顿悟时刻"（aha moment）的自我反思行为。📄 但后续研究发现，**这类自我反思在 base 模型中本来就存在**，"顿悟"是否真的是 RL 涌现的，存在争议。
 
-### 🗣️ 30 秒口语版
+### 📄 R1-Zero 的主要观察
 
-"R1-Zero 是 DeepSeek 论文的**真正惊喜**，比 R1 更有学术意义。
+- 使用一个简单的模板，要求模型先在 `<think>` 中推理再给出答案，不对内容做任何约束。
+- 随着训练进行，平均回答长度持续增长（从数百 token 增长到上万 token），模型学会了"花更多时间思考"。
+- 出现了反思、重新评估、尝试其他解法等行为。论文展示了一个中间 checkpoint 的输出，其中模型写道"Wait, wait. Wait. That's an aha moment I can flag here"。
+- 问题：可读性差、语言混杂。
 
-**R1-Zero 的训练**：
-- 直接在 DeepSeek-V3-Base 上做 GRPO
-- **没有 SFT！**
-- Reward = 答案正确性 + 格式（rule-based）
-- 训练数据：数学/代码题
+> ❌ 旧版中的"训练曲线"（"~1K steps 发生顿悟"）和"Step 0/200/500/1000 的长度与准确率表"是编造的；旧版的中英混杂示例也是虚构的，已删除。真实曲线请看原论文图 2、图 3。
 
-**惊人发现**：
-1. **推理能力涌现**：CoT 越来越长，从几百 token 涨到几千甚至上万
-2. **Aha Moment**：模型学会**自我反思**——'wait, let me reconsider...'
-3. **数学能力超群**：AIME 2024 上达到 71%（超过 o1-preview）
+### 📄 反方证据
 
-**但有缺陷**：
-- 输出语言混乱（中英混杂）
-- 可读性差（推理过程难懂）
-- 不会通用任务（写作、对话等）
+- 📄 **Liu et al. 2025（Dr. GRPO 论文）**：在 RL 之前，DeepSeek-V3-Base 就已经会产生"顿悟"式的自我反思；Qwen2.5 base 模型即使不用提示模板也表现出很强的推理能力，暗示其预训练数据中可能包含大量此类内容。他们还发现，自我反思行为的出现与准确率之间没有明显的相关性。
+- 💭 另一个视角：回答变长可能部分来自 GRPO 的长度偏差（Q4 偏差 1），而不完全是"学会了思考更久"。
 
-**所以做 R1**：
-- 把 R1-Zero 的'推理能力'保留
-- 加 SFT + 通用 RL 修复语言和通用任务
-- 得到**工业可用**的最终版本
+❓ **开放问题**：RL 中出现的反思行为，在多大程度上是"新学到的策略"，又在多大程度上是"放大了 base 模型中已有的模式"？
 
-**学术意义**：
-R1-Zero **打破了'必须先 SFT 再 RL'的共识**。证明——
-- 只要 reward 信号准确，RL 单独可以从 base 训出推理能力
-- SFT 不是必需的；它是工程上让训练稳的'拐杖'
-- 这开启了'纯 RL 训 LLM'的研究路线
-
-R1-Zero 的影响可能比 R1 更深远。"
-
-### 🔍 R1-Zero vs R1 对比
-
-| 维度 | R1-Zero | R1 |
-|---|---|---|
-| 训练流程 | Base → RL | Base → SFT → RL → SFT → RL |
-| 训练阶段 | 1 | 4 |
-| 推理能力 | 强（AIME 71%） | 强（AIME 79.8%） |
-| 语言能力 | 差（中英混杂） | 强 |
-| 通用任务 | 差（只会推理） | 强 |
-| 可读性 | 差 | 好 |
-| 工程可用 | 否 | **是** |
-| 学术意义 | **极高** | 中 |
-
-### 💡 R1-Zero 的训练曲线
-
-DeepSeek 论文图：
-
-```
-推理长度（token）
-   ↑
-   │              ╱  ← Aha moment 发生
-12K│             ╱       (~1K steps)
-   │            ╱
- 8K│         ╱╱
-   │      ╱╱
- 4K│   ╱╱
-   │ ╱
-   └─────────────────→ Training Steps
-   0   500  1000  1500
-
-
-AIME Accuracy
-   ↑
-80%│             ╱─── ← 接近 o1
-   │           ╱
-60%│         ╱
-   │       ╱
-40%│    ╱
-   │  ╱
-20%│╱
-   └─────────────────→ Steps
-```
-
-**关键观察**：
-- **响应长度自然增长**——模型自己学会"想更久"
-- **准确率与长度同步上升**——长 CoT 真的有用
-- **没有 SFT 引导**——纯 reward signal 推动
-
-### 🔥 高频追问 Top 3
-
-**Q：R1-Zero 为什么会出现 Aha Moment？是怎么"学会"自我反思的？**
-
-A：这是**涌现现象**，没有 prompt 明确要求。机制可能是——
-
-- Base model 已经见过包含 "wait", "let me reconsider" 等表达的文本（互联网上的解题）
-- 早期推理时随机使用这些表达
-- 当使用 self-reflection 后能更频繁地得到正确答案 → reward 高 → 频率被强化
-- 慢慢"学到" reflection 是个有效的推理策略
-
-类似自然选择——**有效的策略被 reward 信号筛选出来**。
-
-注意：**Aha moment 不是 R1 特有**——其他强推理模型（o1 等）可能也有，只是 DeepSeek 论文公开命名了。
-
-**Q：R1-Zero 的"语言混乱"具体是什么样？**
-
-A：DeepSeek 论文报告——
-- 中英文随机切换
-- 重复某些 token
-- 输出可读性差（人难理解推理过程）
-- 但**最终答案对**
-
-例子：
-```
-"To solve this 我们需要 first compute the value 这意味着 ..."
-```
-
-这是因为——base model 是多语言的，pure RL 只奖励**正确性**，不奖励语言一致性。模型会用所有可用的"工具"（包括随意切换语言）来得到正确答案。
-
-R1 通过 SFT 引导，让模型说统一的语言。
-
-**Q：R1-Zero 的发现对未来 LLM 研究有什么启示？**
-
-A：几个深远启示——
-
-**1. RL 比 SFT 更接近"学习"的本质**
-- SFT 是模仿，能力上限是数据
-- RL 通过 reward 探索，可以**超越数据**
-
-**2. 推理能力可以"涌现"**
-- 不需要人工设计推理模板
-- 只要 reward 信号准，模型自己会找
-
-**3. 数据质量 < reward 质量**
-- 传统 LLM 拼数据，现在拼 reward 设计
-- Reward Engineering 成为关键技能
-
-**4. 多语言能力是双刃剑**
-- Base model 的多语言能力让 R1-Zero 能用任何方式推理
-- 但也导致语言混乱
-- 未来需要更好的"语言一致性 reward"
-
-这些启示影响了 OpenAI o3、Qwen-QwQ、Kimi-K0 等后续工作。
-
-### ⚠️ 常见陷阱
-
-1. 不要把 R1-Zero 和 R1 混为一谈
-2. R1-Zero 的"语言混乱"是 reward 设计问题，不是 RL 本身的问题
-3. Aha moment 是涌现现象，不是显式设计
-
-### 🏢 大厂偏好
-
-- **DeepSeek**：必问
-- **国内推理模型团队**：复现 R1-Zero 是研究热点
-
-### 📚 延伸阅读
-- [DeepSeek-R1 Paper](https://arxiv.org/abs/2501.12948) §2.2 R1-Zero
-- [TinyZero](https://github.com/Jiayi-Pan/TinyZero) - R1-Zero 小规模复现
+### 📚 出处
+- DeepSeek-AI. *DeepSeek-R1*（§2.2）
+- Liu et al. 2025. arXiv:2503.20783
 
 ---
 
-## Q7：推理能力涌现：Aha Moment 与长 CoT ⭐⭐⭐⭐
+## Q8：RL 真的教会了推理吗？ ⭐⭐⭐⭐⭐
 
-### 🎯 一句话标答
+> 这是 2025 年最热的研究争论之一，也是理解"RL 到底在做什么"的关键。
 
-> 推理模型的核心涌现现象——**长 CoT 自发延长**（从几百到上万 token）+ **Self-reflection 出现**（'wait, let me reconsider'）+ **回溯能力**（发现错误后回退）。这些都不是显式训练的，是 RL 训练中自然涌现的。
+### 📄 观点一：RLVR 主要提高采样效率，没有扩展能力边界
 
-### 🗣️ 30 秒口语版
+📄 **Yue et al., NeurIPS 2025（oral）**（*Does Reinforcement Learning Really Incentivize Reasoning Capacity in LLMs Beyond the Base Model?*）：用 **pass@k**（$k$ 次采样中至少有一次正确的比例）衡量"能力边界"：
+- 在 $k$ 较小时（如 pass@1），RL 模型明显优于 base 模型；
+- 但在 $k$ 很大时（如 pass@256），**base 模型反而追上甚至超过** RL 模型；
+- RL 模型的正确推理路径**已经存在于 base 模型的采样分布中**；随着 RLVR 训练，能力边界往往**变窄**。
+- 相比之下，**蒸馏**可以从教师引入新的推理模式，真正扩展能力。
+- 作者也指出了局限：结论来自有限的模型族、算法和基准；在数学题上，大 $k$ 时的 pass@k 可能被"猜中"夸大。
 
-"R1 出现的'推理涌现'现象可以分三类——
+### 📄 观点二：奖励信号可能没有我们以为的那么重要
 
-**1. 长 CoT 自发延长**
+📄 **Shao et al., ICML 2026**（*Spurious Rewards: Rethinking Training Signals in RLVR*）：在 Qwen2.5-Math-7B 上，用**随机奖励**做 GRPO 就能让 MATH-500 提升约 21 个点，接近使用真实奖励的约 29 个点；格式奖励、甚至错误标签的奖励也能带来明显提升。
+- 作者把原因归于 GRPO 裁剪项带来的偏差：它会放大模型在预训练中已经很强的行为（对 Qwen2.5-Math 来说是"用代码推理"，频率从约 65% 上升到 90% 以上）。
+- **这一效应依赖模型**：同样的虚假奖励在 Llama 3、OLMo 2 上几乎无效甚至有害。
+- 💭 启示：只在 Qwen 系列上验证的 RLVR 结论需要谨慎对待。
 
-训练初期，模型的推理长度约几百 token。随着 RL 训练，长度自然增长到几千甚至上万——**没有任何 prompt 或 reward 直接奖励长度**，模型自己发现"想得更久" → "更可能算对" → "reward 更高"。
+### 📄 观点三：RL 可以扩展能力，但需要条件
 
-**2. Self-reflection 涌现**
+- 💭 有后续工作认为，在更长的训练、更难的题目、更大的探索空间（如保持熵、允许更长回答）下，RL 可以解决 base 模型在大 $k$ 下也解决不了的问题。这一方向的证据仍在积累。
+- 📄 Chu et al., ICML 2025（第 7 章 Q9）：在规则变体和视觉变体上，RL 的泛化明显好于 SFT。
 
-模型学会**自我审视**：
-- "Wait, let me check this again..."
-- "Hmm, this doesn't seem right..."
-- "Actually, I should reconsider..."
+### 🔍 小结
 
-DeepSeek 论文把这命名为 **Aha Moment**——training 进行到某一刻，这种语言模式突然出现并被强化。
+| 问题 | 目前的证据 |
+|---|---|
+| RL 能否提升 pass@1？ | 能，这一点没有争议 |
+| RL 能否扩展 pass@k 意义上的能力边界？ | 有争议；多项研究发现边界收窄 |
+| 奖励的正确性有多重要？ | 依赖模型；在 Qwen2.5-Math 上随机奖励也有效，在其他模型上无效 |
+| 蒸馏 vs RL | 小模型上蒸馏更划算（R1 论文）；蒸馏可能引入新模式（Yue et al.） |
 
-**3. 回溯（Backtracking）涌现**
+❓ **开放问题**：
+- 如何设计实验，可靠地区分"学到新能力"与"重新加权已有能力"？
+- 熵坍塌与能力边界收窄之间是什么关系？📄 Cui et al. 2025（*The Entropy Mechanism of Reinforcement Learning for Reasoning Language Models*）分析了策略熵在 RL 中的变化规律，发现性能提升往往以熵的快速下降为代价，并提出了控制熵的方法。
 
-模型在发现错误后**主动回退**：
-- "Let me redo step 3..."
-- "Wait, I made a mistake at..."
-
-这是高级推理能力，传统 SFT 很难学到。
-
-**这些现象为什么发生**？
-
-不是因为人工设计，而是因为——
-- Base model 已经见过这些表达（互联网上的解题、辩论、思考过程）
-- RL 给出"答案对就好"的简单 reward
-- 这些策略能提高准确率 → reward → 被强化 → 频率上升
-
-**核心 insight**：**Reward 信号足够纯净时，复杂的认知策略可以涌现**——这是 RL 的魅力，也是它超越 SFT 的根本原因。
-
-类似的现象——
-- OpenAI o1：内部 reasoning 也有 self-reflection
-- Qwen-QwQ：开源复现，类似 aha moment
-- Kimi-K0：长 CoT 推理"
-
-### 📊 R1 推理长度统计（论文数据）
-
-| 训练阶段 | 平均响应长度 | AIME 准确率 |
-|---|---|---|
-| Step 0 (initial) | ~400 token | ~15% |
-| Step 200 | ~1500 token | 30% |
-| Step 500 | ~3000 token | 50% |
-| Step 1000 | ~6000 token | 65% |
-| Step 1500+ | ~10000+ token | 71% |
-
-**观察**：长度和准确率**几乎线性相关**——更长的推理 = 更高的准确率。
-
-### 💡 涌现的语言模式（R1-Zero 实例）
-
-DeepSeek 论文的真实输出片段（典型 R1-Zero 响应）：
-
-```
-Let me solve this step by step.
-Step 1: First, I'll compute ...
-       After calculation, I get x = 4.
-
-Hmm, wait. Let me double-check this calculation.
-Going back to step 1, I had ... 
-Actually, I think I made an arithmetic error.
-Let me redo this more carefully...
-
-(重新计算)
-OK, so the correct value is x = 5.
-
-Now continuing with step 2 using x = 5...
-```
-
-**关键元素**：
-- **显式标记 step**（"Step 1", "Step 2"）
-- **自我审视**（"wait", "let me double-check"）
-- **回溯**（"going back to", "let me redo"）
-- **承认错误**（"I made an error"）
-
-这些都不是 prompt 要求的，是 model 自己学会的。
-
-### 🔥 高频追问 Top 3
-
-**Q：能不能加速涌现？比如更好的 base model 或 reward？**
-
-A：可以——这是当前研究热点。
-
-**加速涌现的方法**：
-- **更强的 base model**：base 能力越强，涌现越快（R1 在 V3-Base 上比小模型快）
-- **更精细的 reward**：rule-based + PRM 混合
-- **Cold start data**：少量长 CoT SFT 数据能"启动"涌现
-- **课程学习**：从简单题到复杂题循序渐进
-
-**当前最快**：在 32B 模型上几千 step 能看到涌现迹象。
-
-**Q：涌现能转移到其他任务吗？**
-
-A：**部分能**。
-
-R1 在数学/代码上训出来的推理能力，**部分**迁移到其他场景：
-- 逻辑推理：迁移好
-- 物理/化学题：迁移好
-- 通用对话：差（这就是为什么需要阶段 3-4）
-- 创意写作：几乎不迁移
-
-经验：**"推理"是个相对窄的能力**——擅长可验证的逻辑步骤；不擅长开放性、主观性任务。
-
-**Q：为什么小模型不容易涌现？**
-
-A：根本原因——**base 能力不足**。
-
-涌现需要 base model 有：
-- 足够的语言能力（能写连贯的 CoT）
-- 足够的知识（知道解题步骤）
-- 足够的推理 priors（能识别错误）
-
-小模型（< 10B）往往这些 priors 不够强——RL 训练时学不到有意义的策略。
-
-但**蒸馏可以救小模型**——用大 R1 蒸馏 1.5B/7B 模型，小模型能继承部分推理能力。DeepSeek 也发布了蒸馏版（R1-Distill 系列）。
-
-### ⚠️ 常见陷阱
-
-1. 涌现不是"魔法"——它是 reward 信号驱动的自然选择
-2. 长 CoT 不等于强推理——质量 > 长度
-3. 涌现需要 base 能力，小模型难以从零涌现
-
-### 🏢 大厂偏好
-
-- **DeepSeek / 字节**：必问涌现机制
-- **研究岗**：会问如何加速涌现
+### 📚 出处
+- Yue et al. NeurIPS 2025. arXiv:2504.13837
+- Shao et al. *Spurious Rewards*. ICML 2026. arXiv:2506.10947
+- Cui et al. 2025. arXiv:2505.22617
 
 ---
 
-## Q8：GRPO 的局限与替代方案 ⭐⭐⭐
+## Q9：工程问题与其他方向 ⭐⭐⭐⭐
 
-### 🎯 一句话标答
+### 🔍 工程难点
 
-> GRPO 的主要局限——**rollout 成本高（G 倍）、依赖可验证 reward、对 reward 设计敏感**。替代/改进方案：**GRPO + PRM**、**DPO 用于推理**、**Self-Play**、**Iterative GRPO**。
+| 问题 | 说明 |
+|---|---|
+| 生成占主要时间 | 长思维链（上万 token）的采样远比训练慢；需要 vLLM / SGLang 等推理引擎、异步 rollout |
+| 长度不均衡 | 同一 batch 中少数超长回答拖慢整体（长尾）；DAPO 的超长过滤、部分 rollout 等方法缓解 |
+| 训练与推理的数值不一致 | 训练引擎和推理引擎算出的 log-prob 不同（kernel、精度、MoE 路由不同），重要性比偏离 1，等价于在做 off-policy 训练；有工作用**截断重要性采样**进行修正。GSPO 的序列级比率对这种误差更鲁棒 |
+| 熵坍塌 | 策略熵快速下降，探索不足；Clip-Higher、熵正则、控制高协方差 token 的更新等方法 |
+| 规则奖励的实现 | 答案抽取、数学等价判断、代码沙箱的安全与稳定性 |
 
-### 🗣️ 30 秒口语版
+### 🔍 其他相关方向
 
-"GRPO 不是银弹，有几个明显局限——
+- **Kimi k1.5**（📄 Kimi Team 2025）：长上下文 RL（128K）、基于在线镜像下降的策略优化、"长到短"的蒸馏以减少过度思考。
+- **过度思考**：📄 Chen et al. 2024（*Do NOT Think That Much for 2+3=?*）发现 o1 类模型在简单问题上消耗了过多 token；如何根据难度分配思考预算是一个活跃方向（→ 第 14 章）。
+- **Agent 的多轮 RL**：把工具调用、检索纳入 rollout（如 Search-R1），奖励稀疏、轨迹长，信用分配更难（→ 第 18 章）。
+- **更通用的奖励**：在没有可验证答案的任务上，用生成式 RM / 评分标准（rubric）作为奖励，把 RLVR 扩展到写作、开放问答等领域。
 
-**局限 1：Rollout 成本高**
+### 🧪 动手验证思路
 
-每个 prompt 要采样 G=64 个响应——计算量是 PPO 的 64 倍。对长 CoT（每个响应 10K+ token），这是巨大开销。
+1. 用 TRL 或 veRL 在 Qwen2.5-0.5B/1.5B 上，以 GSM8K 为数据、规则奖励训练 GRPO，记录准确率、回答长度、策略熵的变化。
+2. 对比"回答内平均"和"token 级平均"（DAPO / Dr. GRPO）两种损失聚合方式，观察错误回答的长度变化。
+3. 在训练前后分别测量 pass@1 和 pass@k（$k$ 从 1 到 256），复现 Yue et al. 的曲线交叉现象。
+4. 换成随机奖励，分别在 Qwen 和 Llama 系列的小模型上训练，检验 Spurious Rewards 的模型依赖性。
 
-**应对**：
-- 用专门的 inference engine（如 vLLM）批量生成
-- 减少 G（牺牲 baseline 估计精度）
-- 优化 KV Cache 重用
-
-**局限 2：依赖可验证 Reward**
-
-GRPO 在数学/代码上 work 因为有客观的对错。对**主观任务**（写作、对话），rule-based reward 难定义。
-
-**应对**：
-- 数学/代码用 GRPO
-- 通用任务用 DPO 或 PPO + RM
-- 混合训练（阶段 3-4 of R1）
-
-**局限 3：Reward Hacking**
-
-虽然 GRPO 的 hacking 比 PPO 轻，但仍存在：
-- 模型可能学到"装作对"的输出
-- Format reward 可能被 hack
-- 在复杂 reward 下加剧
-
-**应对**：
-- 多个 reward signal 组合（不能让单一 reward 主导）
-- 定期人工抽查
-- 用 PRM 监督过程
-
-**局限 4：长上下文压力**
-
-R1 的 CoT 越来越长（10K+ token），意味着——
-- 训练时需要长上下文支持
-- KV Cache 显存压力大
-- Attention 计算 O(n²) 主导
-
-**应对**：
-- Flash Attention v3
-- 长上下文优化（YaRN 等）
-- Sequence Parallel
-
-**替代方案**：
-- **DPO-iter**：DPO + 迭代生成偏好对，简单可用
-- **Self-Play**：模型自己生成对手响应
-- **GRPO + PRM**：用 PRM 补充 outcome reward
-- **REINFORCE++**：进一步简化的 RL 变体"
-
-### 🔍 GRPO 的工程困难
-
-| 困难 | 原因 | 应对 |
-|---|---|---|
-| Rollout 慢 | G=64 倍计算 | 高效推理引擎 + 减小 G |
-| 长 CoT 显存 | 10K+ token 序列 | Flash Attention + SP |
-| Reward 设计难 | 主观任务无客观 reward | 混合 reward / 任务分类 |
-| Hacking 风险 | 长 CoT 给更多 hack 空间 | Multi-reward + 人工监控 |
-| 调参敏感 | β, G, lr 等多超参 | 经验配方 + 迭代 |
-
-### 🔥 高频追问 Top 3
-
-**Q：GRPO 之后还会有什么新算法？**
-
-A：可能的方向——
-
-**1. 简化 GRPO**：
-- REINFORCE-style：进一步去掉 PPO 的 clipping
-- 更小的 G + 更稳的 baseline
-
-**2. 多阶段 reward**：
-- 阶段 1 用 outcome
-- 阶段 2 用 PRM 精细化
-- 多 reward 协同
-
-**3. Online + Self-improve**：
-- 模型生成 → 自评 → 训练
-- 持续 self-play 增强
-
-**4. 跨任务推理迁移**：
-- 在数学上训的推理能力，迁移到代码、物理等
-- 跨任务 reward 设计
-
-**5. 多步骤 RL**：
-- 把推理拆成多步，每步独立优化
-- 类似 Multi-step DPO
-
-**Q：GRPO 能扩展到 Agent 任务吗？**
-
-A：理论可以，实践挑战大——
-
-Agent 任务的难点：
-- Reward 极稀疏（任务完成才有 reward）
-- 步骤极多（10+ 工具调用）
-- Credit assignment 难
-
-**适配 GRPO**：
-- 把"任务成功"作为 outcome reward
-- Group sampling 同一任务多次
-- Advantage 按 group 算
-
-但实际效果——尚未广泛验证。Agent 训练仍以传统 PPO 为主。
-
-**Q：如果我要做推理模型，没有 R1 那么多资源，怎么入门？**
-
-A：**蒸馏 + 小规模 RL**——
-
-1. **蒸馏起步**：用 R1 / o1 等模型蒸馏 SFT 数据，先训出一个会 CoT 的小模型
-2. **小规模 RL**：在数学数据集（如 GSM8K + MATH）上做 GRPO，G=8-16
-3. **持续迭代**：rejection sampling + 重训
-4. **资源**：8 × A100 + 几周
-
-工具：
-- Open-R1（HF 复现）
-- TRL（GRPO 实现）
-- vLLM（高效 rollout）
-
-社区资源越来越多，复现门槛在下降。
-
-### ⚠️ 常见陷阱
-
-- GRPO 不是终点，未来还会有更优算法
-- 推理任务有 GRPO，通用任务 DPO 仍是主流
-- Rollout 成本是 GRPO 的核心 bottleneck
-
-### 🏢 大厂偏好
-
-- **DeepSeek / Mistral**：会问 GRPO 改进方向
-- **AI Infra**：会问 rollout 优化
+### 📚 出处
+- Kimi Team. *Kimi k1.5: Scaling Reinforcement Learning with LLMs*. 2025. arXiv:2501.12599
+- Chen et al. 2024. arXiv:2412.21187
+- Jin et al. *Search-R1*. 2025. arXiv:2503.09516
 
 ---
 
 ## 📝 本章小结
 
-| 关键点 | 你必须能脱口而出 |
-|---|---|
-| GRPO 核心 | 去掉 critic 的 PPO，用 group 均值作 baseline |
-| Advantage 公式 | A_i = (r_i - mean) / std，per-response |
-| GRPO 优势 | 无 critic，省显存，推理任务友好 |
-| Group size G | 16-64，DeepSeek 用 64 |
-| ORM vs PRM | outcome 简单可用 / process 精细但贵 |
-| Rule-based ORM | 数学验证 + 格式检查，R1 主用 |
-| R1 流程 | Cold Start SFT → Reasoning RL → 综合 SFT → Final RL |
-| R1-Zero | 纯 RL（无 SFT），证明涌现，但语言乱 |
-| Aha Moment | RL 训练中涌现的 self-reflection |
-| 长 CoT 增长 | 响应长度自然从几百涨到上万 |
-| GRPO 局限 | rollout 成本高、依赖可验证 reward |
+| 关键点 | 你必须能脱口而出 | 性质 |
+|---|---|---|
+| GRPO | 组内归一化优势、按回答共享；无 critic；KL 在损失中（$k_3$） | 🧮 + 📄 |
+| $k_3$ | $(u-1)-\log u$，无偏且非负 | 🧮 |
+| 组基线 | 是 $V(q)$ 的 MC 估计，但含自身样本有偏；留一法无偏（RLOO） | 🧮 + 📄 |
+| GRPO 的偏差 | 长度归一化 → 错误回答变长；标准差归一化 → 难度偏差 | 🧮 + 📄 |
+| 修正 | Dr. GRPO、DAPO（Clip-Higher、动态采样、token 级损失、超长塑形）、GSPO（序列级比率） | 📄 |
+| 价值方法 | VAPO 表明 critic 仍有价值 | 📄 |
+| R1 流程 | 冷启动 SFT → 推理 RL（含语言一致性奖励）→ 拒绝采样 80 万条从 base 重训 → 全场景 RL | 📄 |
+| PRM | R1 未用：步骤难定义、难判断、reward hacking | 📄 |
+| 成本 | V3 最终训练约 558 万美元（不含研发）；R1 在其上约 29.4 万美元 | 📄 |
+| 顿悟时刻 | base 模型中已存在；是否"涌现"有争议 | 📄 + ❓ |
+| RL 是否扩展能力 | pass@1 提升；pass@k 边界可能收窄；随机奖励在 Qwen 上也有效 | 📄 + ❓ |
 
 ## ✅ 自测题
 
-1. **完整推导 GRPO 目标函数**，并解释每个组成部分的作用（特别是为什么 advantage 是 per-response 而非 per-token）
-2. **为什么去掉 critic 后 GRPO 仍能 work**？从 baseline 理论角度回答
-3. ORM vs PRM 各自适合什么场景？DeepSeek-R1 为什么主要选 ORM？
-4. **画出 DeepSeek-R1 训练四阶段流程图**，详述每个阶段的数据来源和目的
-5. R1-Zero 的 Aha Moment 是什么？为什么会涌现？
-6. 给定场景"用 32B 模型训数学推理"，给出完整的 GRPO 训练配方（数据、超参、监控）
-7. GRPO 的 rollout 成本是 PPO 的 G 倍，工程上如何优化？
+1. 写出 GRPO 的目标函数，并说明结果监督和过程监督下优势的计算方式有何不同。
+2. 证明 $k_3$ 是 KL 的无偏估计并且非负。
+3. 为什么说"组均值基线"是有偏的？留一法基线与它是什么关系？
+4. 用一个具体例子说明 GRPO 的长度归一化为什么会让错误回答变长。
+5. 列出 DAPO 的四项改进分别解决了什么问题。GSPO 与 GRPO 的根本区别是什么？
+6. 描述 DeepSeek-R1 的四个阶段，以及为什么第三阶段要从 base 重新训练。
+7. 总结 Yue et al. 2025 和 Spurious Rewards 的结论。如果你要证明"RL 让模型学到了新的推理能力"，你会设计什么实验？
 
 ---
 
-> **本部分完成**：训练与对齐分册（第 6-11 章）已经完成。从预训练到 SFT、PEFT、RLHF、DPO、GRPO——LLM 训练流水线的全链路已经覆盖。下一章进入**推理优化**主题——KV Cache、Flash Attention、量化等工程话题，是 AI Infra 岗的高频区。
+> **下一章预告**：第 12 章｜推理基础与 KV Cache 工程——prefill 与 decode 的计算特性、KV Cache 的显存账本、PagedAttention、前缀缓存，以及 KV Cache 压缩。
