@@ -485,7 +485,7 @@ MQA 是 Shazeer 2019 年提出的，所有 query 头共享一组 K、V，KV Cach
 
 GQA 是 2023 年 Google 的工作，把 query 头分成 g 组，每组共享一组 KV，是 MHA 和 MQA 之间的插值。论文还提出可以用大约 5% 的原始预训练计算量，把 MHA checkpoint 'uptrain' 成 GQA。LLaMA-2 70B 用 64 个 query 头配 8 个 KV 头，现在 GQA 基本是标配。
 
-MLA 是 DeepSeek-V2 提出的，思路不是减少头数，而是把每个 token 的 K、V 联合压缩成一个低维向量 c，只缓存 c。推理时把 K 的上投影矩阵吸收进 Q 的投影，把 V 的上投影吸收进输出投影，就可以直接在低维空间算注意力。难点是 RoPE 会破坏这种吸收，所以 DeepSeek 额外拆出一小段带 RoPE 的 key，所有头共享。DeepSeek-V2 报告说，和 DeepSeek 67B 相比，KV Cache 减少了 93.3%。"
+MLA 是 DeepSeek-V2 提出的，思路不是减少头数，而是把每个 token 的 K、V 联合压缩成一个低维向量 c，只缓存 c。推理时把 K 的上投影矩阵吸收进 Q 的投影，把 V 的上投影吸收进输出投影，就可以直接在低维空间算注意力。难点是 RoPE 会破坏这种吸收，所以 DeepSeek 额外拆出一小段带 RoPE 的 key，所有头共享。DeepSeek-V2 论文的说法是，MLA 的 KV Cache 只相当于 2.25 组的 GQA，效果却优于 MHA。"
 
 ### 📐 KV Cache 对比
 
@@ -500,7 +500,7 @@ MLA 是 DeepSeek-V2 提出的，思路不是减少头数，而是把每个 token
 
 🧮 计算方法：总字节数 = 元素数 × 2 字节 × 层数 × token 数。例如 MHA：$8192 \times 2 \times 32 \times 4096 = 2^{31}$ 字节 = 2 GiB。
 
-> 注：MLA 这一行把 DeepSeek-V2 的 $d_c=512$、$d_h^R=64$ 套到了这个假想模型上，只用于比较量级。📄 DeepSeek-V2 报告中"减少 93.3%"是**相对于 DeepSeek 67B** 的比较。
+> 注：MLA 这一行把 DeepSeek-V2 的 $d_c=512$、$d_h^R=64$ 套到了这个假想模型上，只用于比较量级。📄 DeepSeek-V2 报告中"KV Cache 减少 93.3%"是**整个 DeepSeek-V2 与 DeepSeek 67B** 的比较，其中还包括层数和缓存量化等因素，不能全部归功于 MLA。
 
 ### 🧮 MLA 推导（重点）
 
@@ -552,7 +552,7 @@ A：
 
 1. MQA 是 $g=1$ 的 GQA，MHA 是 $g=h$ 的 GQA。
 2. 讲 MLA 必须讲清**权重吸收**和**RoPE 为什么会破坏吸收**，只说"压缩到低维"是不够的。
-3. "减少 93.3%"是相对 DeepSeek 67B 的数字，不是相对任意 MHA 模型。
+3. "减少 93.3%"是 DeepSeek-V2 整体相对 DeepSeek 67B 的数字，不是 MLA 相对 MHA 的数字。
 
 ### 📚 出处
 - Shazeer. *Fast Transformer Decoding: One Write-Head is All You Need*（MQA）. 2019. arXiv:1911.02150
