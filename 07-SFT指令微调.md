@@ -1,484 +1,261 @@
 # 第 7 章｜SFT 指令微调
 
-> **本章定位**：SFT 是预训练到对齐的桥梁，**数据工程是 90% 的工作量**——LIMA 的"少即是多"、Self-Instruct、Magpie 等是必懂概念。**Loss Masking** 是工程必考细节，多轮对话格式是落地常见坑。本章重点：数据策略 + 工程实现。
+> **本章定位**：SFT 把一个"续写器"变成一个"助手"。本章围绕三个问题展开：**数据**（要多少？从哪来？LIMA 的"表面对齐假说"在多大程度上成立？）、**实现**（chat template、loss masking、packing、EOS 的细节）、**边界**（SFT 能不能教新知识？和 RL 相比学到的是什么？）。近两年的研究对这几个问题都给出了比"质量胜过数量"更细致的答案。
 
-> **配套章节**：预训练 → 第 6 章 / PEFT → 第 8 章 / RLHF → 第 9 章
+> **配套章节**：预训练与继续预训练 → 第 6 章 / LoRA → 第 8 章 / RLHF → 第 9 章 / 推理模型的蒸馏与 RL → 第 11 章 / 分词与特殊 token → 第 4 章
+
+> **标记约定**：📄 论文结论 / 🧮 可推导 / 💭 直觉或有争议 / ❓ 开放问题
 
 ---
 
 ## 📌 本章导航
 
-| 序号 | 题目 | 难度 | 频率（字节/阿里/Meta/DeepSeek） | 类型 |
-|---|---|---|---|---|
-| Q1 | SFT 是什么？和预训练的本质区别 | ⭐⭐⭐ | 4 / 3 / 2 / 2 | 基础 |
-| Q2 | **SFT 数据：质量 vs 数量（LIMA）** | ⭐⭐⭐⭐⭐ | **7 / 5 / 4 / 4** | 必问 |
-| Q3 | Self-Instruct/Evol-Instruct/Magpie | ⭐⭐⭐⭐ | 5 / 3 / 3 / 4 | 数据工程 |
-| Q4 | **Loss Masking 的实现与必要性** | ⭐⭐⭐⭐⭐ | **6 / 4 / 3 / 4** | 易答错 |
-| Q5 | Chat Template 与多轮对话格式 | ⭐⭐⭐⭐ | 5 / 3 / 2 / 4 | 工程 |
-| Q6 | SFT 中的灾难性遗忘 | ⭐⭐⭐⭐ | 4 / 3 / 2 / 3 | 实战 |
-| Q7 | SFT 超参选择经验 | ⭐⭐⭐ | 3 / 2 / 2 / 2 | 工程 |
-| Q8 | Instruction Tuning vs SFT 的细微区别 | ⭐⭐⭐ | 2 / 2 / 2 / 1 | 概念 |
-
----
-
-## Q1：SFT 是什么？和预训练的本质区别 ⭐⭐⭐
-
-### 🎯 一句话标答
-
-> SFT（Supervised Fine-Tuning）= **用指令-响应对的格式继续训练 base model**，让模型学会**听指令并输出符合期望的格式**，本质上还是 next-token prediction，但**数据形态**和预训练完全不同。
-
-### 🗣️ 30 秒口语版
-
-"SFT 和预训练的核心相同 + 关键不同——
-
-**相同点**：都用 next-token prediction 这个目标，loss 都是交叉熵，训练机制完全一致。
-
-**不同点**有三个：
-
-第一，**数据形态**——预训练用海量无标注文本（几 T token），SFT 用结构化的'指令-响应'对（几万到几百万条）。
-
-第二，**目标不同**——预训练学'语言和知识'，SFT 学'怎么响应指令'。比如预训练见过'巴黎是法国首都'这样的陈述，但 SFT 让模型学会'用户问"法国首都是哪里？"，要回答"巴黎"'。
-
-第三，**Loss Masking**——预训练对所有 token 算 loss，SFT 通常**只对响应部分算 loss**——指令部分不算梯度。
-
-实际工业流程：**Pretrain → SFT → RLHF/DPO**。
-
-成本对比：预训练几百万到几千万美元，SFT 几千到几万美元——便宜两到三个数量级。"
-
-### 🔍 SFT 与预训练对比
-
-| 维度 | 预训练 | SFT |
-|---|---|---|
-| 训练目标 | Next-token prediction | Next-token prediction（同） |
-| 数据形态 | 无标注文本 | 指令-响应对 |
-| 数据规模 | T 级 token | 万-百万样本 |
-| 训练时长 | 几月 | 几小时-几天 |
-| Loss 计算 | 所有 token | 仅 response 部分 |
-| 目标能力 | 语言理解 + 知识 | 指令遵循 + 格式 |
-| 评估指标 | PPL、Benchmark | 指令遵循质量 + 下游任务 |
-
-### 🔥 高频追问 Top 3
-
-**Q：SFT 之后模型为什么还需要 RLHF？**
-
-A：因为 SFT 只学了**"什么样的回答是合格的"**——但合格不等于**优秀**。SFT 数据通常是人写的"标准答案"，模型最多模仿到这个水平。
-
-RLHF/DPO 用**偏好数据**（A 比 B 好）训练，让模型超越人类标注者的平均水平。这是 ChatGPT 之所以比纯 SFT 模型强的关键。
-
-**Q：能不能跳过 SFT 直接 RLHF？**
-
-A：**几乎不行**。RLHF 是基于"已经能产生大致合理回答的模型"做精修——base model 还不会听指令，产生的输出大多是噪声，RLHF 没法工作。必须先 SFT 让模型学会指令格式，再 RLHF 优化偏好。
-
-近期有"SFT-free"的尝试（如直接用 DPO + 大量偏好数据），但效果不如 SFT + DPO 组合。
-
-**Q：SFT 一定要全参微调吗？**
-
-A：不一定。**全参微调**调整所有参数，效果好但贵；**PEFT**（LoRA 等）只调少量参数，性价比高。
-
-工业实践：
-- 小公司/资源有限：LoRA + SFT
-- 大模型团队：全参 SFT（如 LLaMA-2 的 Chat 版）
-- 极致质量场景：全参 SFT + RLHF
-
-### ⚠️ 常见陷阱
-
-1. 不要把 SFT 等同于"微调"——Fine-tuning 是泛称，SFT 特指指令格式的微调
-2. 要懂 Loss Masking——不答这点 SFT 答得不完整
-3. 不要把 SFT 和 RLHF 混为一谈
-
----
-
-## Q2：SFT 数据：质量 vs 数量（LIMA） ⭐⭐⭐⭐⭐（必问）
-
-### 🎯 一句话标答
-
-> LIMA 论文（Meta 2023）证明 **1000 条高质量样本就能 SFT 出强模型**——预训练已经塞进了所有知识，SFT 只需要少量样本"激活"指令遵循能力。**质量 >> 数量**是行业共识。
-
-### 🗣️ 30 秒口语版
-
-"这道题是 SFT 章节的'核心题'，必须能完整讲清 LIMA 的实验和启示。
-
-**LIMA 论文的关键发现**——
-
-Meta 团队用 LLaMA-65B 做实验：分别用 **1000 条**精选数据和 **52K 条** Alpaca 数据做 SFT。结果——
-- 1000 条精选数据训出的模型，**在人工评估中胜过用 52K 条 Alpaca 数据训的模型**
-- 1000 条版本和 GPT-4 在某些任务上 tie
-
-**LIMA 的核心论断**——'Superficial Alignment Hypothesis'（表面对齐假说）：
-
-> 一个模型的知识和能力**几乎完全来自预训练**。对齐阶段只是教模型**用什么样的格式和风格来呈现这些已有知识**——所以少量高质量样本就够了。
-
-**实际启示**：
-- 不要堆量——10 万条噪声数据不如 1000 条精品
-- 要保证 **多样性**：覆盖不同任务类型、不同长度、不同风格
-- 要保证 **质量**：每条都是人写或精修的高质量回答
-
-**这之后的工业实践**：
-- LIMA：1000 条
-- LLaMA-2 Chat：约 28000 条精选 SFT 数据
-- DeepSeek-V3：1.5M 条 SFT 数据，经过严格筛选
-
-业界共识——**SFT 数据规模在 10K-1M 量级，关键是质量**。"
-
-### 📐 LIMA 实验细节
-
-**数据来源**：
-- 750 条来自 Stack Exchange / wikiHow 等高质量社区，人工筛选
-- 250 条由作者手工撰写
-
-**评估结果**（300 个测试提示上 head-to-head）：
-
-| 对手 | LIMA 胜率 | 平手 | LIMA 负 |
+| 序号 | 题目 | 难度 | 类型 |
 |---|---|---|---|
-| Alpaca-65B (52K 数据) | **62%** | 21% | 17% |
-| Davinci-003 | 26% | 35% | 39% |
-| GPT-4 | 19% | 38% | 43% |
+| Q1 | SFT 是什么？和预训练、RL 的关系 | ⭐⭐⭐ | 基础 |
+| Q2 | **SFT 数据：LIMA 与表面对齐假说（及其反驳）** | ⭐⭐⭐⭐⭐ | 必问 |
+| Q3 | 合成数据：Self-Instruct / Evol-Instruct / Magpie / 蒸馏 | ⭐⭐⭐⭐ | 数据工程 |
+| Q4 | **Loss masking：为什么、怎么做、一定要做吗** | ⭐⭐⭐⭐⭐ | 易答错 |
+| Q5 | Chat template、EOS 与 packing | ⭐⭐⭐⭐ | 工程 |
+| Q6 | 遗忘、对齐税与"SFT 能否教新知识" | ⭐⭐⭐⭐ | 研究 |
+| Q7 | SFT 超参数 | ⭐⭐⭐ | 工程 |
+| Q8 | Instruction tuning 的历史：FLAN → InstructGPT → Alpaca | ⭐⭐⭐ | 概念 |
+| Q9 | 研究前沿：数据选择、SFT vs RL、推理蒸馏 | ⭐⭐⭐⭐⭐ | 研究视角 |
 
-**结论**：1000 条精选 ≈ 52000 条 Alpaca；接近 Davinci-003 水平。
+---
 
-### 💡 "表面对齐假说"的深层意义
+## Q1：SFT 是什么？和预训练、RL 的关系 ⭐⭐⭐
 
-**Pre-LIMA 思路**：堆量、多样化——更多数据 = 更好对齐。
+### 🎯 一句话标答
 
-**Post-LIMA 思路**：
-- 知识来自**预训练**（已经塞进去）
-- SFT 只是**激活**这些知识的"开关"
-- 所以**少量、高质量、多样化的样本**最有效
-- 数据**配比和多样性 >> 绝对数量**
+> SFT（监督微调）在"指令 → 回答"格式的数据上继续做 next-token prediction，通常**只在回答部分计算 loss**。目标函数和预训练相同，区别在于数据形态和目的：让模型学会对话格式、遵循指令、以期望的风格输出。它通常是 RLHF / RL 之前的一步，但 📄 DeepSeek-R1-Zero 证明了在特定任务上可以**跳过 SFT 直接做 RL**。
 
-**进一步推论**：
-- 如果预训练充分，SFT 应该越少越好（避免污染知识）
-- 数据质量的边际收益远大于数量
-- 这也是 DeepSeek、Mistral 等团队投资数据 curation 的原因
+### 🔍 对比
 
-### 🔥 高频追问 Top 3
+| 维度 | 预训练 | SFT | RLHF / RL |
+|---|---|---|---|
+| 目标 | next-token | next-token（通常只在回答部分） | 最大化奖励（带 KL 约束） |
+| 数据 | 无标注文本，T 级 token | 指令–回答对，千到百万条 | 偏好对 / 可验证奖励 |
+| 数据来源 | 网页、书籍、代码 | 人工撰写、合成、蒸馏 | 模型**自己生成**的回答 |
+| 学到什么 | 语言、知识 | 格式、风格、行为模式 | 在自身分布上优化偏好与正确性 |
 
-**Q：LIMA 之后，工业上为什么还用几十万到几百万条 SFT 数据？**
+### 🔥 高频追问
 
-A：因为 LIMA 是**学术理想化设定**。工业场景更复杂——
-- 需要覆盖**很多领域**（数学、代码、推理、对话、写作...）
-- 需要**多语言**支持
-- 需要**特定行为**（拒答、安全、格式...）
+**Q：SFT 之后为什么还要 RLHF？**
 
-1000 条覆盖不了这么多维度。**实际工业数据规模 50K-1M，但仍然遵循 LIMA 原则——每一条都精挑细选**。
+A：
+- 💭 SFT 是模仿学习：模型学习**示范数据**的分布，上限受示范者水平限制，而且只见过"好的回答"，没见过"坏的回答"。
+- RLHF 用的是**比较**信号（A 比 B 好），对标注者来说比写出完美回答更容易；并且训练数据来自模型**自己的**输出（on-policy），能纠正模型自己特有的错误。
+- 📄 InstructGPT（Ouyang et al. 2022）中，1.3B 的 InstructGPT（SFT + RLHF）在人类偏好评估中胜过 175B 的 GPT-3；并且在各个模型规模上，PPO 模型都比同规模的 SFT 模型更受偏好。
 
-**Q：LIMA 的结论在小模型上也成立吗？**
+**Q：能不能跳过 SFT 直接做 RL？**
 
-A：**部分成立**。LIMA 用 65B 大模型——预训练知识足够"充分"，SFT 只激活。小模型（如 7B）预训练知识不够，可能需要 SFT 数据"补充"知识，所以 SFT 数据量需求相对大一点。
+A：
+- 📄 **DeepSeek-R1-Zero**（2025）直接在 base 模型 DeepSeek-V3-Base 上用基于规则的奖励（答案正确性 + 格式）做 RL，推理能力大幅提升，并自发出现了长链思考、自我验证等行为。
+- 但 R1-Zero 存在**可读性差、语言混杂**等问题，因此最终的 DeepSeek-R1 仍然先用少量"冷启动"长思维链数据做 SFT，再做 RL（→ 第 11 章）。
+- 💭 结论：在**有可验证奖励的任务**上可以跳过 SFT；对开放式对话等任务，SFT 仍是让 RL 有一个合理起点的常用方法。
 
-但即便 7B 模型，**几千条高质量样本仍胜过几十万条噪声样本**。质量优先的原则不变。
+> ❌ 旧版说"几乎不行，必须先 SFT"，在 2025 年之后已不成立。
+
+**Q：有没有把 SFT 和偏好优化合并的方法？**
+
+A：📄 ORPO（Hong et al. 2024）在 SFT 的 loss 上加一个基于**几率比**的偏好项，一个阶段同时完成指令学习和偏好对齐，不需要参考模型（→ 第 10 章）。
+
+### 📚 出处
+- Ouyang et al. *Training language models to follow instructions with human feedback*（InstructGPT）. NeurIPS 2022. arXiv:2203.02155
+- DeepSeek-AI. *DeepSeek-R1*. 2025. arXiv:2501.12948
+- Hong et al. *ORPO*. EMNLP 2024. arXiv:2403.07691
+
+---
+
+## Q2：SFT 数据：LIMA 与表面对齐假说（及其反驳） ⭐⭐⭐⭐⭐
+
+### 🎯 一句话标答
+
+> 📄 LIMA（Zhou et al., NeurIPS 2023）只用 **1000 条**精选数据微调 LLaMA 65B，在人类评估中有 43% 的情况与 GPT-4 持平或更好（对 Bard 为 58%，对 DaVinci-003 为 65%）。作者据此提出**表面对齐假说**：知识和能力几乎都来自预训练，对齐只是学习与用户交互的"格式和风格"。📄 但后续研究发现，对**数学、多跳推理**等任务，性能随 SFT 数据量呈**幂律增长**，并未很快饱和（Raghavendra et al. 2024），说明这个假说至少是过度简化的。
+
+### 🗣️ 30 秒口语版
+
+"LIMA 是 Meta 2023 年的工作。他们从 Stack Exchange、wikiHow、Reddit 等社区挑了约 750 条高质量问答，再手写约 250 条，一共 1000 条，微调 LLaMA 65B。人类评估中，LIMA 有 43% 的时候被认为不差于 GPT-4，65% 的时候不差于用 RLHF 训练过的 DaVinci-003。
+
+由此他们提出表面对齐假说：模型的知识基本都在预训练里，对齐只是教它用什么格式和风格说话，所以少量高质量数据就够了。
+
+但这个假说后来受到了挑战。2024 年 Scale AI 的研究发现，数学、代码、多跳推理等任务的性能随 SFT 样本数呈幂律提升，少量样本主要教会了风格，并没有让推理能力饱和。所以更准确的说法是：**少量数据就能教会格式，但能力的提升仍然需要数据量**。工业界的 SFT 数据量也确实大得多，比如 LLaMA 2-Chat 用了约 2.7 万条高质量标注，DeepSeek-V3 用了 150 万条。"
+
+### 📄 LIMA 的细节
+
+- 模型：LLaMA 65B。
+- 数据：约 750 条来自社区问答（Stack Exchange、wikiHow、Reddit 写作板块等，人工筛选和编辑），约 250 条由作者撰写（包括一些多样性提示和安全相关的示例）。
+- 训练：15 个 epoch，学习率 $10^{-5}$ 线性衰减到 $10^{-6}$，并在残差连接上使用逐层递增的 dropout。
+- 评估：人类偏好评估 + GPT-4 作为评判的偏好评估，两者结论一致。
+- 消融：在数据量相同的情况下，**提高质量和多样性**比单纯增加数量更有效；在 Stack Exchange 数据上把数量翻倍到 2000、4000 条并没有带来提升。
+
+> ❌ 旧版的 LIMA 对比表格（对 Alpaca 胜率 62%、对 GPT-4 胜率 19% 平局 38% 等）与论文摘要的数字不符，已替换。
+
+### 📄 支持与反驳
+
+| 观点 | 证据 |
+|---|---|
+| 支持：对齐主要改变风格 | 📄 **URIAL**（Lin et al., ICLR 2024, *The Unlocking Spell on Base LLMs*）：比较 base 模型和对齐后模型的 token 分布，发现差异主要集中在少数**风格类 token**（如话语标记、安全声明）上；仅用 3 个精心设计的上下文示例 + 系统提示，base 模型就能达到接近 SFT/RLHF 模型的对话质量 |
+| 反驳：推理能力随数据持续提升 | 📄 **Raghavendra et al. 2024**（*Revisiting the Superficial Alignment Hypothesis*）：在 Llama-2/3、Mistral 上，数学、代码、指令遵循、多跳推理的性能随微调样本数呈幂律增长；少量样本主要教风格，推理能力随数据显著提升 |
+| 推理蒸馏的"少量样本" | 📄 **s1**（Muennighoff et al. 2025）：1000 条精选的推理轨迹微调 Qwen2.5-32B-Instruct，配合"预算强制"，取得了很强的数学推理表现；用全部 5.9 万条数据训练并没有显著优于这 1000 条。📄 **LIMO**（Ye et al. 2025）用 817 条样本得到类似结论 |
+
+💭 一种调和的解释：当 base 模型**已经具备**某种能力时，少量高质量数据就能把它"激活"出来（LIMA、s1、LIMO 使用的都是很强的 base 模型）；当能力需要真正被**学习**时，数据量依然重要。
+
+### 🔥 高频追问
+
+**Q：工业界的 SFT 数据量是多少？**
+
+A：
+- 📄 InstructGPT：SFT 数据约 1.3 万条提示。
+- 📄 LLaMA 2-Chat：作者发现第三方 SFT 数据多样性和质量不足，最终使用了 **27,540 条**自有的高质量标注，并发现"少量高质量数据就足够"。
+- 📄 DeepSeek-V3：约 **150 万条**，覆盖多个领域；其中推理数据由 DeepSeek-R1 生成后经过筛选，非推理数据由 DeepSeek-V2.5 生成并由人工核验。
+- 📄 Tülu 3（AI2, 2024）：公开了完整的 SFT 数据混合（约 94 万条）和消融实验，是研究 SFT 数据配方的好资料。
 
 **Q：怎么评估 SFT 数据质量？**
 
-A：几个维度——
-- **指令多样性**：通过 embedding 聚类，看覆盖了多少不同任务
-- **响应质量**：人工抽样评估，看响应是否准确、完整、得体
-- **长度分布**：避免全是短答案或全是长答案
-- **格式正确性**：JSON、代码块、Markdown 等格式是否正确
-- **没有矛盾**：同样的指令不应该有冲突的响应
+A：
+- 多样性：用 embedding 聚类看覆盖面；按任务类型、难度、长度统计分布。
+- 正确性：对数学、代码等可验证任务，用执行或答案匹配做过滤（拒绝采样）。
+- LLM 打分：📄 AlpaGasus（Chen et al. 2024）用 ChatGPT 给 Alpaca 的 52K 数据打分，只保留约 9K 条高分数据，训练效果反而更好。
+- 难度/价值：📄 IFD（Li et al. 2024, *From Quantity to Quality*）用"有指令时和无指令时回答的困惑度之比"衡量一条数据对模型的难度，挑选高 IFD 的样本。
 
-实际工业 pipeline：用 GPT-4 / Claude 等大模型给每条数据打分（**LLM-as-judge**），过滤低分。
-
-### ⚠️ 常见陷阱
-
-1. 要能脱口而出 LIMA 的 1000 条——这是数字 anchor
-2. 要懂"表面对齐假说"——这是关键概念，能加分
-3. 不要绝对化"越少越好"——工业上还是要覆盖全面
-
-### 🏢 大厂偏好
-
-- **字节 / 阿里 SFT 数据团队**：必问，会让你详述数据 pipeline
-- **Meta / DeepSeek**：会问"LIMA 假说在你工作中怎么验证"
-
-### 📚 延伸阅读
-- [LIMA: Less Is More for Alignment](https://arxiv.org/abs/2305.11206) - 必读
-- [DeepSeek-V3 SFT 部分](https://arxiv.org/abs/2412.19437)
+### 📚 出处
+- Zhou et al. *LIMA: Less Is More for Alignment*. NeurIPS 2023. arXiv:2305.11206
+- Lin et al. *The Unlocking Spell on Base LLMs: Rethinking Alignment via In-Context Learning*. ICLR 2024. arXiv:2312.01552
+- Raghavendra et al. *Revisiting the Superficial Alignment Hypothesis*. 2024. arXiv:2410.03717
+- Muennighoff et al. *s1: Simple test-time scaling*. 2025. arXiv:2501.19393
+- Ye et al. *LIMO: Less is More for Reasoning*. 2025. arXiv:2502.03387
+- Touvron et al. *Llama 2*. arXiv:2307.09288（§3.1）
+- Lambert et al. *Tülu 3*. 2024. arXiv:2411.15124
+- Chen et al. *AlpaGasus*. ICLR 2024. arXiv:2307.08701
+- Li et al. *From Quantity to Quality*. NAACL 2024. arXiv:2308.12032
 
 ---
 
-## Q3：Self-Instruct / Evol-Instruct / Magpie 对比 ⭐⭐⭐⭐
+## Q3：合成数据：Self-Instruct / Evol-Instruct / Magpie / 蒸馏 ⭐⭐⭐⭐
 
 ### 🎯 一句话标答
 
-> 这三种是**自动生成 SFT 数据**的代表方法——**Self-Instruct** 让 LLM 自己生成指令-响应对、**Evol-Instruct** 用 LLM 把简单指令进化成复杂指令、**Magpie** 利用 chat template 让 LLM 自己"招供"训练数据。一代比一代精巧。
+> 📄 **Self-Instruct** 从 175 条种子任务出发，让模型生成新指令和回答，再过滤去重；📄 **Evol-Instruct**（WizardLM）用模型把已有指令"进化"得更复杂、更多样；📄 **Magpie** 只给对齐模型输入"用户回合的开头"，让它自己续写出用户问题，再生成回答，不需要种子数据。更普遍的做法是**用强模型蒸馏**：用更强的模型生成回答，再经过过滤。
 
-### 🗣️ 30 秒口语版
-
-"这三种方法解决同一个问题——**人工写 SFT 数据太贵**。
-
-**Self-Instruct（2022）**：
-- 给 LLM 一些**种子指令**（175 条手写）
-- 让 LLM 生成新指令 + 生成响应
-- 经过过滤（去重、低质量过滤），形成 SFT 数据集
-- **Alpaca 用 Self-Instruct + GPT-3.5 生成了 52K 数据**
-
-**Evol-Instruct（WizardLM, 2023）**：
-- 从简单指令开始，让 LLM **进化**它
-- 五种进化操作：增加约束、深化、具体化、增加推理步骤、广度变换
-- 迭代多轮，得到更难、更多样的指令
-- WizardLM 用这个方法做出顶尖开源模型
-
-**Magpie（2024）**：
-- 利用**对齐模型的 chat template** 的特性
-- 给模型只输入 `<|user|>` 这个开头标记
-- 模型会自动'补全'——生成它训练时见过的'用户指令'
-- 然后再生成响应
-- **完全无监督地从对齐模型中提取它的训练数据分布**
-
-三者关系——**Self-Instruct → Evol-Instruct（更复杂）→ Magpie（更优雅）**。"
-
-### 📐 Self-Instruct 流程
+### 📐 Self-Instruct（Wang et al. 2023）
 
 ```
-1. 种子集：175 条人工编写的指令-响应对
-
-2. 指令生成：
-   Prompt: "参考下面的例子，生成 8 条新的不同的指令：
-            [示例1]: ...
-            [示例2]: ...
-            新指令："
-   LLM 生成 → 8 条新指令
-
-3. 任务分类：判断是分类还是生成任务
-
-4. 实例生成：
-   对每条新指令，让 LLM 生成响应
-
-5. 过滤：
-   - ROUGE-L 相似度 < 0.7（去重）
-   - 长度合理
-   - 关键词过滤
-
-6. 加入数据池，迭代生成
+1. 种子：175 条人工编写的任务（每条包含指令和示例）
+2. 从任务池中采样 8 条（6 条人工 + 2 条模型生成）作为示例，让模型生成新指令
+3. 判断新指令是否为分类任务（决定先生成输入还是先生成输出）
+4. 为新指令生成输入–输出实例
+5. 过滤：与已有指令的 ROUGE-L > 0.7 的丢弃；过滤无法由语言模型完成的指令（如涉及图片）
+6. 加入任务池，迭代
 ```
 
-### 📐 Evol-Instruct 的五种进化
+📄 Stanford Alpaca 使用类似流程，用 text-davinci-003 生成了 52K 条数据微调 LLaMA 7B。
 
-给定原始指令 `I = "翻译: hello → ?"`，可以进化为：
+### 📐 Evol-Instruct（Xu et al. 2023, WizardLM）
 
-**Add Constraints**: "翻译 hello 成法语，且使用古老的表达方式"
+- **深度进化**：增加约束、深化问题、具体化、增加推理步骤、使输入更复杂。
+- **广度进化**：在同一领域生成全新的、更罕见的指令。
+- **淘汰**：去掉进化失败的指令（例如没有信息增量、模型无法回答）。
 
-**Deepening**: "证明二加二等于四，使用集合论的方法"
+### 📐 Magpie（Xu et al. 2024）
 
-**Concretizing**: "讲一个发生在 1920 年代上海，主角是一位记者的悬疑故事"
-
-**Increased Reasoning Steps**: "篮子里有 8 个苹果，又加了 3 个，然后取出 2 个，再加 1.5 倍数量的橘子，问篮子里水果总数"
-
-**In-breadth Evolving**: 换主题/换形式生成完全新的指令
-
-### 📐 Magpie 的"招供"机制
-
-正常使用：
 ```
-输入: "<|user|>什么是 Python?<|assistant|>"
-输出: "Python 是..."
+输入：<|start_header_id|>user<|end_header_id|>\n\n      ← 只给"用户回合"的模板前缀
+输出：（模型自动续写出一条用户问题）
+然后：把这条问题按正常格式输入，让模型生成回答
 ```
 
-Magpie 反向利用：
-```
-输入: "<|user|>"  ← 只给开头
-输出: 模型"补全"——继续生成它训练时看过的 user query 分布！
-比如生成: "什么是 Python? 它有哪些主要特性?<|assistant|>Python..."
-```
+💡 原理：对齐模型在训练中见过大量"用户回合"，因此在用户位置上续写时，会从它学到的**用户问题分布**中采样。📄 作者用 Llama-3-Instruct 生成了数百万条数据，筛选后的子集微调 Llama-3-8B-Base，在 AlpacaEval 等对齐基准上可以与官方的 Llama-3-8B-Instruct 相当。
 
-**核心 insight**：**对齐模型在训练时见过大量真实指令，让它"招供"这些指令，就得到了真实分布的数据**。完全不需要种子集或人工设计。
+### 🔥 高频追问
 
-### 🔍 三种方法的对比
-
-| 方法 | 来源数据 | 生成方式 | 质量 | 多样性 | 成本 |
-|---|---|---|---|---|---|
-| Self-Instruct | 175 种子 + LLM | LLM 模仿生成 | 中 | 中 | 低 |
-| Evol-Instruct | 原始指令 + LLM | LLM 进化变换 | 高 | 高 | 中 |
-| Magpie | 仅对齐模型 | 模型"招供" | 高 | 高 | 低 |
-
-### 🔥 高频追问 Top 3
-
-**Q：自动生成数据有哪些坑？**
+**Q：用强模型的输出训练自己的模型，有什么风险？**
 
 A：
-- **模式塌缩**：生成的数据风格趋同，多样性低
-- **错误传播**：LLM 生成的回答可能是错的（hallucination），训练后强化错误
-- **数据污染**：可能生成训练分布外的"奇怪"内容
-- **过滤成本**：需要后续过滤、人工抽查
-- **重复**：自然语言的句法多样性有限，容易生成相似数据
+- 📄 **模仿的假象**：Gudibande et al. 2023（*The False Promise of Imitating Proprietary LLMs*）发现，用 ChatGPT 输出训练的模仿模型能很好地学到**风格**，人类评估者也常常被骗，但在事实性和基础能力上与原模型差距没有缩小。结论是"想要缩小能力差距，需要更好的 base 模型，而不是模仿数据"。
+- **错误传递**：教师模型的幻觉和错误会被学生学走，因此需要验证（可执行代码、可验证答案）和过滤。
+- **许可**：部分商业模型的服务条款禁止用其输出开发竞争模型，需要注意合规。
+- **学生能否超过老师**：📄 Burns et al. 2023（OpenAI, *Weak-to-Strong Generalization*）发现，用弱模型的标签训练强模型时，强模型的表现可以**超过**弱模型的标签水平，但还达不到用真实标签训练的水平。
 
-应对——用更强的 LLM（如 GPT-4）生成 + 多轮过滤 + 人工抽样质检。
+**Q：合成数据怎么保证多样性？**
 
-**Q：用 GPT-4 生成 SFT 数据训自己的模型，存在什么风险？**
+A：常用方法：用多样的种子（人物设定、主题分类、难度）驱动生成，例如 📄 Persona Hub（Ge et al. 2024）用 10 亿个合成"人物设定"来生成多样化的指令；对生成结果做 embedding 去重；分领域控制配比。
 
-A：
-- **法律风险**：OpenAI 的 ToS 禁止用 GPT 输出训竞争模型（但实际执行难）
-- **能力上限**：模型最多达到生成数据的来源模型水平——**徒弟难超过师傅**（除非加 RLHF/RLAIF 等增强）
-- **风格继承**：会继承 GPT 的写作风格、价值观、拒答偏好
-- **数据污染**：GPT 的训练数据可能有偏差，传递给学生模型
-
-业界做法：
-- 大公司：自建数据（开源模型 + 人工）
-- 中小团队：用 Mistral / LLaMA 这类开源模型生成数据（无法律限制）
-- 强烈不推荐用 GPT-4 数据训商业模型
-
-**Q：怎么衡量自动生成数据的质量？**
-
-A：几个工具——
-- **困惑度过滤**：用 base model 给每条数据打 PPL，过滤太奇怪的
-- **LLM-as-judge**：用强模型打分
-- **聚类多样性**：用 sentence embedding + KMeans，看聚类数和均衡度
-- **人工抽样**：1% 数据人工审核
-- **最终下游任务**：用生成数据训完，看 benchmark
-
-### ⚠️ 常见陷阱
-
-1. 不要只说 Self-Instruct——要懂演化路线（Self-Instruct → Evol-Instruct → Magpie）
-2. Magpie 是 2024 新方法——跟上前沿能加分
-3. 要懂自动生成的"局限"——不能盲信
-
-### 🏢 大厂偏好
-
-- **数据团队**：必问，可能让你设计一个完整的数据 pipeline
-- **字节 / DeepSeek**：可能问"如何提升数据多样性"
-
-### 📚 延伸阅读
-- [Self-Instruct](https://arxiv.org/abs/2212.10560)
-- [WizardLM (Evol-Instruct)](https://arxiv.org/abs/2304.12244)
-- [Magpie](https://arxiv.org/abs/2406.08464)
+### 📚 出处
+- Wang et al. *Self-Instruct*. ACL 2023. arXiv:2212.10560
+- Taori et al. *Stanford Alpaca*（2023，GitHub）
+- Xu et al. *WizardLM*. ICLR 2024. arXiv:2304.12244
+- Xu et al. *Magpie*. ICLR 2025. arXiv:2406.08464
+- Gudibande et al. 2023. arXiv:2305.15717
+- Burns et al. *Weak-to-Strong Generalization*. 2023. arXiv:2312.09390
+- Ge et al. *Scaling Synthetic Data Creation with 1,000,000,000 Personas*. 2024. arXiv:2406.20094
 
 ---
 
-## Q4：Loss Masking 的实现与必要性 ⭐⭐⭐⭐⭐（易答错）
+## Q4：Loss masking：为什么、怎么做、一定要做吗 ⭐⭐⭐⭐⭐
 
 ### 🎯 一句话标答
 
-> SFT 训练时**只对 response 部分算 loss**，instruction 部分的 loss 被 mask 掉——避免让模型学"生成问题"（meaningless），让它专注学"生成答案"（关键）。
+> 标准做法是把 system / user 部分的 label 设为 `-100`，**只在 assistant 回答部分计算 loss**，让模型专注学"怎么回答"而不是"怎么提问"。📄 但它不是金科玉律：Shi et al.（NeurIPS 2024）发现，当**指令很长、回答很短**或**训练样本很少**时，在指令部分也计算 loss 反而更好，原因是减少了对指令数据集的过拟合。
 
-### 🗣️ 30 秒口语版
-
-"这是 SFT 实现的核心细节，很多新手会忽略。
-
-**问题场景**：SFT 数据是 `[INSTRUCTION] + [RESPONSE]` 的串联。如果直接算 next-token prediction loss——
-
-模型会**同时学**：
-- 给定 [前 i 个 token]，预测第 i+1 个 token（在 instruction 里）→ **学'生成问题'，没意义**
-- 给定 [INSTRUCTION + 前 j 个 response token]，预测下一个 response token → **学'答问题'，是目标**
-
-前者是噪声，后者是信号。混在一起会**稀释训练信号**，效果差。
-
-**Loss Masking 的做法**：
-- 把 instruction 部分的 label 设为 -100（PyTorch 的忽略值）
-- `F.cross_entropy(logits, labels, ignore_index=-100)` 自动跳过这些位置
-- 只有 response 部分参与 loss 计算
-
-**效果对比**：
-- 不做 mask：训得慢，质量差（loss 信号被稀释 50%+）
-- 做 mask：训得快，质量好
-
-多轮对话的处理更复杂——见 Q5。"
-
-### 💻 实现示例
-
-**单轮 SFT 数据**：
+### 💻 实现（推荐基于 chat template 逐段构造）
 
 ```python
-instruction = "请翻译: hello"
-response = "你好"
-
-# 拼接
-full_text = instruction + response
-
-# Tokenize
-tokens = tokenizer(full_text).input_ids  # 假设 [101, 102, 103, 104, 105, 106]
-
-# 构造 labels
-inst_len = len(tokenizer(instruction).input_ids)  # 假设 4
-labels = tokens.copy()
-labels[:inst_len] = [-100] * inst_len  # mask instruction 部分
-# labels = [-100, -100, -100, -100, 105, 106]
-
-# Loss 计算
-loss = F.cross_entropy(logits, labels, ignore_index=-100)
-# 只对位置 4, 5 算 loss
+def build_example(messages, tokenizer):
+    input_ids, labels = [], []
+    for i, msg in enumerate(messages):
+        # 渲染到当前消息为止的前缀，取增量部分，避免"整体 tokenize 与分段 tokenize 结果不一致"
+        prefix = tokenizer.apply_chat_template(messages[:i], tokenize=False) if i else ""
+        full = tokenizer.apply_chat_template(messages[:i + 1], tokenize=False)
+        seg_ids = tokenizer(full[len(prefix):], add_special_tokens=False).input_ids
+        input_ids += seg_ids
+        labels += seg_ids if msg["role"] == "assistant" else [-100] * len(seg_ids)
+    return input_ids, labels
 ```
 
-**多轮对话**的处理：
-- A. 只算最后一轮 assistant：简单
-- B. 算所有 assistant 轮：信号更密，主流做法
+要点：
+1. **assistant 回答末尾的结束 token**（如 `<|eot_id|>`、`<|im_end|>`）必须参与 loss，否则模型学不会停止（Q5）。
+2. assistant 回合的**角色头**（如 `<|im_start|>assistant\n`）通常不计算 loss，因为推理时它由模板提供。
+3. 注意 BPE 合并可能跨越"指令/回答"边界：如果先拼接字符串再整体 tokenize，然后按字符长度切分 mask，边界附近可能错位。上面的做法以模板渲染出的段落为单位处理；更稳妥的方式是使用 tokenizer 的 offset mapping 或框架自带的实现（如 TRL 的 `assistant_only_loss`）。
 
-### 🔥 高频追问 Top 3
+### 🔥 高频追问
 
-**Q：为什么 -100 是 PyTorch 的默认忽略值？**
+**Q：不做 masking 一定更差吗？**
 
-A：纯约定俗成——PyTorch 的 `F.cross_entropy` 和 `nn.CrossEntropyLoss` 默认 `ignore_index=-100`。选 -100 是因为：
-- 必须是负数（label 是非负 token ID，所以负数一定是"非法 label"，安全）
-- -100 足够"远离"任何可能的 token ID
+A：不一定。
+- 📄 **Shi et al., NeurIPS 2024**（*Instruction Tuning With Loss Over Instructions*）：提出"指令建模"（在指令和提示部分也计算 loss）。在 21 个基准上的实验表明，效果取决于两个因素：**指令长度与回答长度之比**、**训练样本数量**。在指令长、回答短的数据集上，或者只有少量样本（类似 LIMA 的设置）时，指令建模明显更好；作者分析认为原因是**减少了对 SFT 数据集的过拟合**。他们并不主张取代标准做法，而是给出了低资源场景下的建议。
+- 📄 Huerta-Enochian & Ko 2024（*Instruction Fine-Tuning: Does Prompt Loss Matter?*）发现，对**回答很短**的数据，给提示部分一个较小的 loss 权重（而不是完全 0）有时能提升效果。
 
-也可以自己设其他值（如 -1），但默认 -100 不要乱改，保持习惯。
+> ❌ 旧版说"不做 mask 训得慢、质量差（信号被稀释 50%+）"，没有出处，并且与上述研究不完全一致。
 
-**Q：能不能给 instruction 一个小的 loss 权重（比如 0.1）而不是完全 mask？**
+**Q：多轮对话怎么 mask？**
 
-A：可以尝试，但**不主流**。完全 mask 的逻辑很清晰：instruction 是用户输入，模型不需要学。给小权重的逻辑是"让模型也对 instruction 有点感知"，但实际效果**没明显增益**，反而引入超参（权重选多少？）。
+A：主流做法是**对所有 assistant 回合都计算 loss**（信号更多），而不是只算最后一轮。但要注意：如果前面的 assistant 回合质量较差（例如来自真实对话日志），可能会学到不好的行为，此时可以只在高质量回合上计算 loss。
 
-业界主流：**完全 mask instruction**。
+**Q：loss 怎么归一化？**
 
-**Q：多轮对话怎么做 Loss Masking？**
+A：和第 5 章 Q1 一样，要明确是"按 token 平均"还是"按样本平均"。按 token 平均时，长回答的权重更大；梯度累积和 packing 时要用全局的有效 token 数归一化，否则会出现 bug。
 
-A：多轮数据格式：
-```
-<user>问1<assistant>答1<user>问2<assistant>答2...
-```
+**Q：为什么 ignore_index 默认是 -100？**
 
-两种策略——
+A：PyTorch `CrossEntropyLoss` 的默认值。只要是一个不会出现的 token id（负数）即可；关键是和框架保持一致。
 
-**策略 A：只对最后的 assistant 算 loss**——简单但浪费前面信息
-
-**策略 B：对所有 assistant 轮次算 loss**（主流）
-
-```python
-labels = []
-for token, role in zip(tokens, roles):
-    if role == "user" or role == "system":
-        labels.append(-100)
-    else:  # assistant
-        labels.append(token)
-```
-
-### ⚠️ 常见陷阱
-
-1. 必须用 ignore_index=-100，不要乱改
-2. Tokenize 时要单独算 instruction 长度：拼接后再 tokenize 和分开 tokenize 长度可能不同（subword 合并问题），要小心
-3. 多轮对话用策略 B（对所有 assistant 算 loss）
-
-### 🏢 大厂偏好
-
-- **训练工程师岗**：必问
-- **字节 / Meta**：可能会让你现场写多轮对话的 mask 实现
+### 📚 出处
+- Shi et al. NeurIPS 2024. arXiv:2405.14394
+- Huerta-Enochian & Ko. 2024. arXiv:2401.13586
 
 ---
 
-## Q5：Chat Template 与多轮对话格式 ⭐⭐⭐⭐
+## Q5：Chat template、EOS 与 packing ⭐⭐⭐⭐
 
 ### 🎯 一句话标答
 
-> Chat Template 是模型识别**对话角色**的特殊格式——用 `<|user|>`, `<|assistant|>` 等特殊 token 标记每段话的发起者；**不同模型的 template 不同，训练和推理必须一致**，否则模型会乱套。
+> Chat template 用特殊 token 标记角色和回合边界。**训练和推理必须使用完全相同的模板**（包括空格、换行、BOS）。SFT 必须让模型学会在回答结束时输出**结束 token**，否则推理时不会停止。Packing 可以减少 padding 浪费，但要处理好样本之间的注意力隔离。
 
-### 🗣️ 30 秒口语版
+### 📐 主流模型的模板
 
-"Chat Template 是工程落地的关键细节，很多 bug 都在这里。
-
-**核心问题**：base model 是续写器，不知道'用户'和'助手'的区别。要让它学对话，必须用**特殊 token 显式标记角色**——这就是 chat template。
-
-每个模型的 template 不同——LLaMA-3 用 `<|start_header_id|>` 包围角色名，Qwen 用 `<|im_start|>...<|im_end|>`，DeepSeek 用 `User:` 和 `Assistant:` 加特殊 token。
-
-**关键原则**：
-- 训练用什么模板，推理就用什么模板——一致性是铁律
-- 通常用 `tokenizer.apply_chat_template()` 自动处理
-- 自己拼字符串容易出错（漏特殊 token、空格不对）
-
-**为什么不同模型 template 不同**？历史原因——各家在 SFT 时自定义了格式，已经训成了肌肉记忆，没法统一。所以使用任何模型前必须查它的 template。
-
-**常见 bug**：训练用 ChatML 格式（Qwen 的），推理时用了 LLaMA 模板，模型表现像 base model（不会回答），就是 template 不匹配。"
-
-### 📐 主流模型的 Chat Template
-
-**LLaMA-3**：
+**LLaMA 3**：
 ```
 <|begin_of_text|><|start_header_id|>system<|end_header_id|>
 
@@ -489,7 +266,7 @@ Hello!<|eot_id|><|start_header_id|>assistant<|end_header_id|>
 Hi there!<|eot_id|>
 ```
 
-**Qwen-2.5 (ChatML)**：
+**Qwen（ChatML）**：
 ```
 <|im_start|>system
 You are a helpful assistant.<|im_end|>
@@ -499,318 +276,203 @@ Hello!<|im_end|>
 Hi there!<|im_end|>
 ```
 
-**DeepSeek-V3**：
+**DeepSeek-V3**（注意特殊 token 中的竖线和下划线是全角字符 `｜` 和 `▁`）：
 ```
-<|begin_of_sentence|>You are a helpful assistant.
-
-User: Hello!Assistant: Hi there!
+<｜begin▁of▁sentence｜>You are a helpful assistant.<｜User｜>Hello!<｜Assistant｜>Hi there!<｜end▁of▁sentence｜>
 ```
 
-注意 LLaMA-3 在角色名后有**两个换行**，Qwen 是**一个换行**——细节错就崩。
+**LLaMA 2-Chat**：
+```
+<s>[INST] <<SYS>>
+You are a helpful assistant.
+<</SYS>>
 
-### 🔥 高频追问 Top 3
-
-**Q：如果训练和推理用了不同模板会怎样？**
-
-A：**模型表现会"退化到 base model"**——可能不会停止生成、不会按 assistant 角色回答、混用角色等。表现糟糕但又不会完全错——这种 silent failure 是常见的 bug 来源。
-
-调试技巧：把训练时的一条数据完整 print 出来，再把推理的输入完整 print 出来，**逐字符对比**。
-
-**Q：怎么自定义 chat template？**
-
-A：在 HuggingFace 上，每个模型的 `tokenizer_config.json` 里有 `chat_template` 字段，是 Jinja2 模板：
-
-```python
-tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3-8B-Instruct")
-print(tokenizer.chat_template)  # 看官方模板
+Hello! [/INST] Hi there! </s>
 ```
 
-自定义时直接覆盖这个字段。**强烈建议用官方模板，不要自己造**。
+> ❌ 旧版的 DeepSeek-V3 模板写成了 `User: Hello!Assistant:` 的纯文本形式（这更接近更早版本 DeepSeek 模型的格式）。DeepSeek-V3 使用 `<｜User｜>`、`<｜Assistant｜>` 特殊 token。**以 HF 仓库中 `tokenizer_config.json` 的 `chat_template` 为准**。
 
-**Q：System prompt 怎么处理？**
+### 🔥 高频追问
 
-A：大部分现代模型支持 system role，放在最前面：
+**Q：模板不一致会出什么问题？**
 
-```
-<|im_start|>system
-你是一个有用的助手...<|im_end|>
-<|im_start|>user
-...<|im_end|>
-```
+A：💭 常见现象包括：不停止生成、重复角色标记、回答质量下降、安全行为失效。这类问题往往不会直接报错，所以排查时要把**训练样本**和**推理输入**都渲染成字符串并逐字符比较，再比较 token id。
 
-实践要点：
-- System prompt 通常**不算 loss**（和 user 一样 mask）
-- 训练时要混合**有/无 system prompt** 的数据，让模型学会处理两种情况
-- 不要给太长的 system prompt——会挤占有效上下文
+**Q：EOS 有哪些坑？**
 
-### ⚠️ 常见陷阱
+A：
+- 回答末尾的结束 token 必须在 label 中保留（不能被 mask 成 -100）。
+- 如果 pad token 与 EOS 共用同一个 id，并且用"label 中 pad 位置一律设为 -100"的方式处理，就会**把真正的 EOS 也 mask 掉**，导致模型学不会停止。这是一个很常见的 bug。
+- 推理时的停止条件要包含模板中的回合结束 token（如 LLaMA 3 的 `<|eot_id|>`），而不只是 `<|end_of_text|>`。
 
-1. **训练推理 template 不一致**——最常见 bug
-2. **手动拼接字符串容易漏特殊 token**——用 `apply_chat_template`
-3. **EOS token 的处理**：训练时是否在 response 后加 EOS 决定模型是否会停止生成
+**Q：Packing 怎么做？**
 
-### 🏢 大厂偏好
+A：把多条样本拼接成一个固定长度的序列，减少 padding。
+- **朴素 packing**：直接拼接，样本之间可以互相 attention，存在"跨样本污染"。
+- **隔离 packing**：使用块对角的因果 mask（FlashAttention 的变长接口），并让每个样本的位置编码从 0 开始（第 1 章 Q8）。HF Transformers 和 TRL 支持这种方式（如 `DataCollatorWithFlattening`）。
+- loss 归一化要按全局有效 token 数计算（Q4）。
 
-- **训练工程师 / SFT 团队**：必问
-- **AI 部署岗**：会问推理时如何确保 template 一致
+**Q：system prompt 怎么处理？**
+
+A：system 部分通常不计算 loss。训练数据中要包含有 system prompt 和没有 system prompt 的样本，以及多种不同的 system prompt，否则模型可能只在训练时见过的那种 system prompt 下表现正常。
 
 ---
 
-## Q6：SFT 中的灾难性遗忘 ⭐⭐⭐⭐
+## Q6：遗忘、对齐税与"SFT 能否教新知识" ⭐⭐⭐⭐
 
 ### 🎯 一句话标答
 
-> SFT 用窄分布的指令数据训练，会让模型**遗忘预训练中学到的通用知识**——通过**数据混合、低 lr、早停、PEFT** 等手段缓解。
+> SFT 数据分布窄，可能导致通用能力下降（**遗忘**）；对齐后在某些 NLP 基准上的性能下降被称为**对齐税**。📄 一个更微妙的问题是：通过 SFT 让模型学习它**原本不知道的事实**，学得很慢，而且会**增加幻觉**（Gekhman et al. 2024）。
 
-### 🗣️ 30 秒口语版
+### 📄 关键研究
 
-"灾难性遗忘是 SFT 的隐形杀手。
+- 📄 **对齐税**：InstructGPT 发现 RLHF 后模型在部分公开 NLP 数据集上的性能下降，提出 **PPO-ptx**：在 RL 训练中混入预训练梯度来缓解。
+- 📄 **新知识与幻觉**：Gekhman et al., EMNLP 2024（*Does Fine-Tuning LLMs on New Knowledge Encourage Hallucinations?*）在闭卷问答上做了受控实验：包含模型"不知道"的事实的样本，在微调中**学得比已知样本慢得多**；一旦这些样本最终被学会，模型产生幻觉的倾向会**线性增加**。作者认为模型主要通过预训练获得知识，微调更多是教它更高效地使用已有知识。
+- 📄 **"遗忘"可能是表面的**：Zheng et al., ICLR 2025（*Spurious Forgetting in Continual Learning of Language Models*）发现，在连续指令微调中观察到的很多"遗忘"，实际上是**任务对齐**的丢失，而不是知识的丢失，用少量数据就能恢复。
+- 📄 **LoRA 少学少忘**：Biderman et al. 2024（第 6 章 Q8，第 8 章）。
 
-**现象**：用某个领域 SFT 数据微调后，模型在该领域表现提升，但在其他领域（如基础知识、推理、代码）显著下降。原因——
+> ❌ 旧版说"DeepSeek-V3 等大模型 SFT 时混合大量通用对话数据，就是为了防遗忘"，没有出处，已删除。
 
-**SFT 数据分布窄**：通常只覆盖部分任务类型。
-**梯度方向偏**：训练时只学新数据，原有能力对应的参数被'冲走'。
-**学习率敏感**：lr 太大或训练步数太多，加速遗忘。
+### 🔥 高频追问
 
-**应对策略**：
+**Q：怎么缓解遗忘？**
 
-**1. 数据混合**：把通用数据混入 SFT 集（如 OpenHermes 等通用 SFT 集），保持广度。
-**2. 较低学习率**：通常 1e-5 到 5e-5，比预训练小一个量级。
-**3. 早停**：监控通用 benchmark（如 MMLU），下降超过阈值就停。
-**4. PEFT**：LoRA 等只调少量参数，对原模型影响小。
-**5. 重放（Replay）**：少量预训练数据混入 SFT。
+A：
+- 混入通用领域的 SFT 数据（多任务混合）。
+- 降低学习率、减少 epoch。
+- 使用 LoRA 等参数高效方法（以学得少为代价）。
+- 混入少量预训练数据（replay）或在 RL 阶段加入预训练损失（PPO-ptx）。
+- 模型融合：把领域模型和通用模型的权重做插值或更复杂的合并（如 TIES、DARE，→ 第 8 章）。
 
-**实际经验**：
-- 全参微调 + 单一领域数据：遗忘严重
-- 全参微调 + 通用数据混合：遗忘适中
-- LoRA + 单一领域：遗忘很少（参数冻结）
+**Q：怎么监控遗忘？**
 
-DeepSeek-V3 等大模型 SFT 时混合大量通用对话数据，就是为防遗忘。"
+A：在训练过程中定期评估一组覆盖通用知识、推理、代码、对话、安全的基准，并与 base 模型对比。💭 阈值要根据业务需求设定，没有通用的"下降 5% 就停"规则。
 
-### 🔥 高频追问 Top 3
-
-**Q：怎么定量评估遗忘？**
-
-A：**遗忘曲线监控** —— SFT 训练过程中定期评估一组**保留 benchmark**：
-- 通用知识：MMLU
-- 推理：GSM8K, MATH
-- 代码：HumanEval
-- 对话：MT-Bench
-
-如果某个指标下降超过阈值（如 5%），可能在过拟合特定领域。
-
-**Q：LoRA 真的比全参微调更抗遗忘吗？**
-
-A：**通常是**。LoRA 只更新少量低秩参数，**原始权重几乎冻结**——大部分预训练知识保留。
-
-但代价是表达力上限低，对**完全新领域**（如模型未见过的语言、代码语法）效果不如全参。
-
-经验：
-- 新任务/新格式：LoRA 够用
-- 新领域/新语言：可能需要全参 + 数据混合
-
-**Q：能用什么方法"恢复"已经遗忘的能力？**
-
-A：几条路——
-- **混合预训练数据继续训**：用少量原始预训练数据 + 新 SFT 数据
-- **从 base model 重新做 SFT**：抛弃已经过拟合的版本，用更好的数据配方
-- **多任务 SFT**：一次性混合多个领域的数据
-- **模型融合**：LoRA 多个版本融合，平衡不同能力
-
-### ⚠️ 常见陷阱
-
-1. 不要只看 SFT loss——要看通用 benchmark 变化
-2. 学习率太大是遗忘主因——SFT 用 1e-5 量级
-3. PEFT 抗遗忘但有上限——不是万能药
+### 📚 出处
+- Ouyang et al. *InstructGPT*. arXiv:2203.02155
+- Gekhman et al. EMNLP 2024. arXiv:2405.05904
+- Zheng et al. *Spurious Forgetting in Continual Learning of Language Models*. ICLR 2025. arXiv:2501.13453
+- Biderman et al. *LoRA Learns Less and Forgets Less*. TMLR 2024. arXiv:2405.09673
 
 ---
 
-## Q7：SFT 超参选择经验 ⭐⭐⭐
+## Q7：SFT 超参数 ⭐⭐⭐
 
 ### 🎯 一句话标答
 
-> SFT 超参经验：**学习率 1e-5 到 5e-5**，**batch size 32-128**，**1-3 epochs**，**warmup 3-10%**，**bf16 + AdamW**——比预训练保守得多。
+> SFT 的学习率比预训练小一到两个数量级（全参微调常见 $10^{-6}$ 到 $2\times10^{-5}$），训练 1–3 个 epoch（小数据集可以更多），通常不需要很大的 batch。最可靠的方法是参考公开配方，再在自己的数据和评测上做小范围扫描。
 
-### 🗣️ 30 秒口语版
+### 📄 公开配方
 
-"SFT 超参的核心原则是'**比预训练保守**'——
+| 来源 | 学习率 | Epoch | 其他 |
+|---|---|---|---|
+| 📄 LLaMA 2-Chat | $2\times10^{-5}$，cosine | 2 | batch 64、序列长度 4096、weight decay 0.1；多条样本拼接，只在回答部分计算 loss |
+| 📄 LIMA | $10^{-5}$ → $10^{-6}$ 线性 | 15 | 1000 条数据；逐层递增的残差 dropout |
+| 📄 Tülu 3 | 不同规模分别调参 | 2 | 公开了完整超参数和消融 |
 
-**学习率**：1e-5 ~ 5e-5。预训练用 1e-4 ~ 6e-4，SFT 小一个量级。lr 太大会破坏预训练学到的表示。
+> 💭 Epoch 多少合适和数据量有关：LIMA 只有 1000 条数据，用了 15 个 epoch，并发现验证困惑度与生成质量不相关，因此根据人工评估选择 checkpoint。
 
-**Batch size**：32-128（global batch）。比预训练小很多——SFT 数据量小，大 batch 没意义。
+### 🔥 高频追问
 
-**Epoch 数**：1-3。**不要超过 3**——过拟合迅速。LIMA 用 15 epoch（数据极少），是特例。
+**Q：有什么简单有效的 SFT 技巧？**
 
-**Warmup**：总步数的 3-10%。SFT 步数少，warmup 也短。
+A：📄 **NEFTune**（Jain et al., ICLR 2024）：训练时在输入 embedding 上加均匀噪声（幅度按 $\alpha/\sqrt{Ld}$ 缩放），在 AlpacaEval 上带来了明显提升，几乎不增加成本。作者分析认为它减少了对训练数据的过拟合，生成的回答更长、更详细。
 
-**优化器**：AdamW，β1=0.9, β2=0.95, weight_decay=0.1。和预训练一致。
+**Q：学习率过大有什么表现？**
 
-**精度**：bf16 混合精度。
+A：💭 通用基准大幅下降、输出重复或格式混乱、训练 loss 下降很快但生成质量变差。
 
-**LR Schedule**：Cosine 或 Linear decay 到 0。
+---
 
-**最大长度**：根据数据，通常 2K-8K。
+## Q8：Instruction tuning 的历史：FLAN → InstructGPT → Alpaca ⭐⭐⭐
 
-**Gradient Clipping**：max_norm=1.0。
+### 🎯 一句话标答
 
-实战经验——SFT 超参不是太敏感，**只要 lr 不太大、epoch 不太多，结果都差不多**。质量主要看数据。"
+> 📄 FLAN（Wei et al. 2021）把 60 多个已有 NLP 数据集改写成自然语言指令，微调 137B 的 LaMDA-PT 后，在**未见过的任务类型**上的零样本能力明显提升，提出了"instruction tuning"的概念。📄 InstructGPT（2022）改用**真实用户提示**和人工撰写的回答做 SFT，再做 RLHF。📄 Alpaca（2023）则用合成数据低成本复现了指令遵循能力，开启了开源 SFT 的浪潮。
 
-### 🔍 SFT vs 预训练超参对比
+### 🔍 演化
 
-| 超参 | 预训练 | SFT |
+| 时间 | 工作 | 关键点 |
 |---|---|---|
-| 学习率 | 1e-4 ~ 6e-4 | 1e-5 ~ 5e-5 |
-| Batch size (global) | 1M+ tokens | 32-128 samples |
-| Epoch | 1（数据多到训不完） | 1-3 |
-| Warmup | 0.3-3% | 3-10% |
-| Sequence length | 2K-8K | 2K-32K |
-| 优化器 | AdamW | AdamW（同） |
+| 2021 | 📄 FLAN（Google） | NLP 数据集 + 指令模板；在 LaMDA-PT 137B 上验证；小模型上 instruction tuning 反而有害，效果随规模出现 |
+| 2021 | 📄 T0（Sanh et al.） | 多任务提示训练 T5，零样本泛化 |
+| 2022 | 📄 InstructGPT（OpenAI） | 真实 API 用户提示；SFT → RM → PPO |
+| 2022 | 📄 Flan-T5 / Flan-PaLM（Chung et al.） | 扩展到 1800+ 任务，加入思维链数据，系统研究了任务数量、模型规模的 scaling |
+| 2023 | 📄 Alpaca、Vicuna | Self-Instruct 合成数据、ShareGPT 用户对话 |
+| 2024– | 📄 Tülu 3、OLMo 2 等 | 完全开放的后训练配方（SFT + DPO + RLVR） |
 
-### 🔥 高频追问 Top 3
+### 🔥 高频追问
 
-**Q：SFT epoch 数怎么定？**
+**Q：FLAN 式数据和现代 SFT 数据的区别？**
 
-A：**通常 2-3**。
-- 1 epoch：可能欠拟合（数据没学透）
-- 2-3 epoch：通常最优
-- 4+ epoch：开始过拟合，遗忘加剧
+A：FLAN 式数据来自已有的标注数据集，任务边界清晰、回答通常很短；现代 SFT 数据更多是开放式的真实用户需求，回答更长、更详细。📄 Chung et al. 2022 发现两者可以互补，在 FLAN 混合中加入思维链数据，对推理任务有明显帮助。
 
-监控**验证集 loss** 决定何时停。如果训练 loss 持续下降但验证 loss 上升，立即停。
-
-**Q：lr 太大会有什么具体表现？**
-
-A：
-- 训练初期 loss 飙升（梯度 spike）
-- 模型输出变得"奇怪"——重复、乱码
-- 通用 benchmark 大幅下降
-- 即使最终 loss 收敛，效果也比小 lr 差
-
-如果观察到这些，**立即调小 lr** 重新训。
-
-**Q：长上下文 SFT 有什么特殊处理？**
-
-A：
-- **序列长度**：根据应用场景，可能 8K-128K
-- **Sequence Parallel**：需要 SP 分担激活显存
-- **数据**：要包含真实长序列，不能只 padding 短序列
-- **lr 可能要更小**：长序列梯度方差大
-
-### 🏢 大厂偏好
-
-- 这题是**铺垫题**，会作为更深入超参/工程问题的起点
+### 📚 出处
+- Wei et al. *Finetuned Language Models Are Zero-Shot Learners*（FLAN）. ICLR 2022. arXiv:2109.01652
+- Sanh et al. *Multitask Prompted Training Enables Zero-Shot Task Generalization*（T0）. ICLR 2022. arXiv:2110.08207
+- Chung et al. *Scaling Instruction-Finetuned Language Models*. 2022. arXiv:2210.11416
+- Jain et al. *NEFTune*. ICLR 2024. arXiv:2310.05914
 
 ---
 
-## Q8：Instruction Tuning vs SFT 的细微区别 ⭐⭐⭐
+## Q9：研究前沿：数据选择、SFT vs RL、推理蒸馏 ⭐⭐⭐⭐⭐
 
-### 🎯 一句话标答
+### 方向 1：数据选择
 
-> **Instruction Tuning** 是 2021 年 FLAN 提出的概念——把多种 NLP 任务转换成指令格式，让模型学会泛化到新指令；**SFT** 是更广义的微调流程。**Instruction Tuning ⊂ SFT** 的一种形式。
+- 📄 **LESS**（Xia et al., ICML 2024）：用低秩梯度特征估计每条训练数据对目标任务的影响（类似影响函数），只选 5% 的数据就能达到甚至超过用全部数据训练的效果。
+- 📄 **Deita**（Liu et al., ICLR 2024）：综合复杂度、质量、多样性三个维度挑选数据。
+- ❓ 开放问题：在一个模型上选出的数据，换一个模型是否依然最优？
 
-### 🗣️ 30 秒口语版
+### 方向 2：SFT 学到了什么，RL 学到了什么
 
-"这两个词常被混用，但严格说有区别——
+- 📄 **Chu et al., ICML 2025**（*SFT Memorizes, RL Generalizes*）：在文本规则变体的纸牌算术游戏和视觉导航任务上，基于结果奖励的 RL 能泛化到未见过的规则和视觉变体，而 SFT 更倾向于记住训练数据。但 SFT 仍然有用：它稳定了输出格式，让后续 RL 能够发挥作用。
+- 💭 这为"SFT → RL"的两阶段流程提供了一种解释：SFT 负责格式和起点，RL 负责泛化。
 
-**Instruction Tuning（FLAN, 2021）**：
-- Google 提出的概念
-- 把**已有的 NLP 任务**（分类、问答、翻译...）**重写成自然语言指令**
-- 比如：把 SST-2 分类任务改成"判断这句话情感：'今天天气很好'"
-- 用大量这种任务训练，模型学会**指令遵循的一般能力**
-- **关键**：用大量已标注的 NLP 任务数据
+### 方向 3：推理蒸馏
 
-**SFT（更广义）**：
-- 任何用指令格式做的有监督微调
-- 数据可以是：自然指令、对话、特定领域任务
-- 数据来源：人工写、自动生成、从对话日志收集
-- 不一定来自传统 NLP 任务
+- 📄 DeepSeek-R1 用 R1 生成的约 80 万条数据蒸馏 Qwen、Llama 系列的小模型，效果显著；论文还发现，对小模型而言，**蒸馏比直接对小模型做大规模 RL 更有效**（→ 第 11 章）。
+- 📄 s1、LIMO：少量高质量推理轨迹 + 强 base 模型即可获得强推理能力（Q2）。
+- ❓ 开放问题：蒸馏得到的能力和 RL 得到的能力在鲁棒性和泛化上有何不同？
 
-简而言之——**Instruction Tuning 是 SFT 的早期形态**。FLAN 启发了后来的 Alpaca / Vicuna 等用 LLM 生成数据的 SFT 路线。
+### 🧪 动手验证思路
 
-到 GPT-4 / Claude 3 时代，**SFT 已经不限于 NLP 任务**，扩展到对话、写作、代码、推理——所以现在大家说 SFT 更多，instruction tuning 这个词渐渐淡化。"
+1. 用一个 1B 左右的 base 模型，分别用 1K、10K、100K 条 SFT 数据训练，在指令遵循（如 IFEval）和数学（如 GSM8K）上画出性能随数据量的曲线，检验表面对齐假说。
+2. 在同一数据集上比较"只算回答 loss"和"指令也算 loss"，并按"指令/回答长度比"对数据分组分析（复现 Shi et al. 2024 的趋势）。
+3. 故意制造"pad = EOS 且 mask 掉所有 pad"的 bug，观察模型是否学不会停止。
+4. 实现带块对角 mask 的 packing，与朴素 packing 对比训练效果。
 
-### 🔍 演化关系
-
-```
-FLAN (2021)
-  ├─ Instruction Tuning 概念
-  ├─ 用 NLP 任务模板化
-  └─ T5/PaLM 上验证
-
-  ↓ 启发
-
-InstructGPT (2022)
-  ├─ OpenAI 用真实用户指令
-  ├─ SFT + RLHF
-  └─ ChatGPT 前身
-
-  ↓ 扩展
-
-Alpaca/Vicuna (2023)
-  ├─ Self-Instruct 生成数据
-  ├─ Llama base + SFT
-  └─ 开源仿制 ChatGPT
-
-  ↓ 完善
-
-现代 LLM Pipeline
-  Pretrain → SFT (含多种数据) → RLHF/DPO
-```
-
-### 🔥 高频追问 Top 3
-
-**Q：FLAN 和现代 SFT 最大区别是什么？**
-
-A：**数据来源**——
-- FLAN：基于已有 NLP 数据集（分类、问答等），人工写指令模板
-- 现代 SFT：自然指令（用户真实问题），无固定模板，覆盖更宽
-
-效果上现代 SFT 模型更"像人"——能处理开放式问题，不只是固定任务。
-
-**Q：Instruction Tuning 现在还有用吗？**
-
-A：**有用，但融入了 SFT**。现代 SFT 数据集（如 OpenHermes）通常包含——
-- FLAN 风格的传统任务（分类、QA、摘要等）
-- 自然对话指令
-- 代码、数学等专门数据
-
-两者**混合使用**效果最好。
-
-**Q：Pre-training + Instruction Tuning 能不能跳过 RLHF？**
-
-A：**FLAN 时代是的**——只用 Instruction Tuning，没有 RLHF。但现代 LLM 已经证明：**RLHF 后的对话质量显著高于纯 SFT**。所以现在的 pipeline 几乎都是 SFT + RLHF/DPO。
-
-### 🏢 大厂偏好
-
-- 这题是**铺垫题**，更多体现你的概念清晰度
-
-### 📚 延伸阅读
-- [FLAN](https://arxiv.org/abs/2109.01652) - Instruction Tuning 的起源
-- [InstructGPT](https://arxiv.org/abs/2203.02155) - 现代 SFT 的范本
+### 📚 出处
+- Xia et al. *LESS*. ICML 2024. arXiv:2402.04333
+- Liu et al. *What Makes Good Data for Alignment?*（Deita）. ICLR 2024. arXiv:2312.15685
+- Chu et al. *SFT Memorizes, RL Generalizes*. ICML 2025. arXiv:2501.17161
+- DeepSeek-AI. *DeepSeek-R1*. arXiv:2501.12948
 
 ---
 
 ## 📝 本章小结
 
-| 关键点 | 你必须能脱口而出 |
-|---|---|
-| SFT 本质 | next-token prediction，只是数据是指令-响应对 |
-| LIMA 数字 | 1000 条精选 ≈ 52000 条 Alpaca |
-| 表面对齐假说 | 知识来自预训练，SFT 只是激活格式 |
-| 数据生成路线 | Self-Instruct → Evol-Instruct → Magpie |
-| Loss Masking | 用 -100 mask instruction，只算 response loss |
-| Chat Template | 训练推理必须一致，否则模型崩 |
-| 灾难性遗忘 | 混合通用数据 + 小 lr + 早停 |
-| SFT 超参 | lr 1e-5~5e-5, batch 32-128, 1-3 epoch |
-| Instruction Tuning | FLAN 提出，SFT 早期形态 |
+| 关键点 | 你必须能脱口而出 | 性质 |
+|---|---|---|
+| SFT 本质 | next-token，通常只在回答部分算 loss | 🧮 |
+| 跳过 SFT | DeepSeek-R1-Zero 在可验证任务上直接 RL；R1 仍用冷启动 SFT | 📄 |
+| LIMA | 1000 条；对 GPT-4 43% 不差于；表面对齐假说 | 📄 |
+| 假说的反驳 | 推理类任务随 SFT 数据量呈幂律提升 | 📄 |
+| 合成数据 | Self-Instruct → Evol-Instruct → Magpie；模仿只学到风格 | 📄 |
+| Loss masking | 标准做法；指令长/回答短/样本少时，指令也算 loss 可能更好 | 📄 |
+| 模板与 EOS | 训练推理一致；EOS 必须计算 loss；pad=EOS 的坑 | 🧮 |
+| 新知识 | SFT 学新事实慢，并会增加幻觉 | 📄 |
+| 超参数 | LLaMA 2-Chat：2e-5、2 epoch；NEFTune | 📄 |
+| SFT vs RL | SFT 偏记忆、RL 偏泛化；SFT 为 RL 稳定格式 | 📄 |
 
 ## ✅ 自测题
 
-1. 用 50 行 PyTorch 代码实现一个带 Loss Masking 的 SFT 训练 step（单轮和多轮各一版）
-2. 解释 LIMA 的"表面对齐假说"，并讨论它在小模型上是否成立
-3. 比较 Self-Instruct、Evol-Instruct、Magpie 三种数据生成方法的优劣，并选一种为你的场景设计 pipeline
-4. 如果你训完 SFT 发现 MMLU 下降了 10%，怎么排查和恢复？
-5. LLaMA-3 和 Qwen-2.5 的 chat template 有什么区别？混用会出什么 bug？
+1. 实现一个基于 chat template 的多轮 loss masking，并说明如何处理 BPE 跨边界合并的问题。
+2. 解释表面对齐假说，并给出一个支持它和一个反驳它的研究。
+3. 什么情况下在指令部分也计算 loss 会更好？为什么？
+4. 列出三个与 EOS / 模板相关的常见 bug，以及排查方法。
+5. 为什么通过 SFT 注入新知识可能导致幻觉？你会怎样给模型注入新的领域知识？
+6. 你要为一个垂直领域构建 SFT 数据集：说明数据来源、合成方法、质量控制、配比和评估方案。
 
 ---
 
-> **下一章预告**：第 8 章｜PEFT 与 LoRA 系列——LoRA 推导是必考题，QLoRA 的 NF4 + Double Quantization 是 DeepSeek 风格的细节题。
+> **下一章预告**：第 8 章｜PEFT 与 LoRA 系列——LoRA 的推导与初始化、QLoRA 的 NF4 与双重量化、DoRA / PiSSA 等变体，以及"LoRA 学得少、忘得少"背后的原因。
