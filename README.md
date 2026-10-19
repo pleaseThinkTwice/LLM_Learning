@@ -53,5 +53,7 @@
 
 ## 📝 更新日志
 
+- 2026-10-19：完成第 12–20 章修订。删除全部"频率"打分列与"大厂偏好"小节；重算第 14 章投机解码加速比表；修正 EAGLE-2/3、DistServe、MT-Bench（一致率口径、位置一致性、注水攻击）、Anthropic 多 Agent token 倍数、MCP 规范（SHOULD 而非 MUST）等数字与表述；补充 MagicDec、RAG vs 长上下文实证、METR time horizon、评测统计学等内容；第 15–20 章新增"研究前沿与开放问题"小节。
+- 2026-10-19：重写第 1–11 章（同标准：去除无出处数字，补充论文出处、前沿与开放问题）。
 - 2026-10-19：重写第 3 章。修正 Sandwich-LN 公式、梯度公式、RMSNorm 历史、QK-Norm 现状；删除无出处的数字；补充 Xiong/Liu 2020、Pre-RMSNorm 等价性、Peri-LN/OLMo 2/Gemma 3、Curse of Depth、DyT 等内容。README 补全第 12–20 章。
 - 2026-06-21：初始版本
