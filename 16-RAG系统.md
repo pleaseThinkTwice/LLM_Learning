@@ -1,18 +1,22 @@
 # 第 16 章｜RAG 系统
 
-> **本章定位**：**第四部分开篇**，也是你目标岗位（Agent / 应用工程）的**主场**。第三部分回答"**怎么把模型跑起来**"，第四部分回答"**怎么把模型用起来**"。
->
-> 本章有三条主线，建议带着它们读：
->
-> **① RAG 是一条<u>串行的链条</u>，任何一环断了整个就废。** 解析 → 分块 → 向量化 → 检索 → 融合 → 重排 → 生成，**七个环节，七种失败模式**。面试问"RAG 效果不好怎么办"，考的就是你能不能**定位到是哪一环**。而绝大多数人的第一反应是"调 prompt"——**那是最后一环，通常也是最不可能的那一环**。
->
-> **② 检索的召回率是整个系统的<u>天花板</u>。** 检索不到的东西，后面做什么都是白搭。所以**先测检索，再调生成**。
->
-> **③ "相对优于绝对"这条主线在本章第<u>四</u>次出现**——**RRF 用 rank 不用 score**，因为不同检索器的分数**根本不可比**。（前三次：PPO 的 Advantage、RLHF 的 reward shaping、第 14 章的 min-p）
+> **本章定位**：第四部分回答"怎么把模型用起来"，RAG（检索增强生成）是第一站。贯穿全章的三个判断：
+> 1. **RAG 是一条串行链路**：解析 → 分块 → 向量化 → 检索 → 融合 → 重排 → 组装 → 生成。效果不好时，关键是定位到哪一环出了问题，而不是先去调 prompt。
+> 2. **检索召回率是整个系统的上限**：没检索到的内容，后面怎么做都补不回来。所以先测检索，再调生成。
+> 3. **不同来源的分数不可比**：RRF 只用排名、LLM 评审更适合做相对比较，都是同一个原则。
 
-> **标注约定**：📄 论文/官方报告结论（附出处）｜🧮 可推导/可算｜💭 直觉、经验或有争议｜❓ 开放问题。
+> **配套章节**：Prefix Caching → 第 12 章 Q7 / 长上下文与 RoPE 外推 → 第 2 章 / 约束解码 → 第 14 章 Q8 / 推理服务与容量 → 第 15 章 / Function Calling → 第 17 章 / Agentic RAG → 第 18 章 / LLM-as-Judge 的偏差 → 第 19 章
 
-> **配套章节**：Prefix Caching（RAG 的 TTFT 命门）→ 第 12 章 Q7 / n-gram 投机解码（RAG 场景免费提速）→ 第 14 章 Q6 / 约束解码（引用格式）→ 第 14 章 Q8 / SGLang 与容量规划 → 第 15 章 / Function Calling → 第 17 章 / Agentic RAG → 第 18 章 / LLM-as-Judge 的偏差 → 第 19 章
+---
+
+## 📏 标注约定
+
+| 标记 | 含义 |
+|---|---|
+| 📄 **[论文]** | 论文或官方报告的结论（附出处） |
+| 🧮 **[推导]** | 可推导或可计算 |
+| 💭 **[直觉]** | 经验、启发式或有争议 |
+| ❓ **[开放]** | 尚无共识 |
 
 ---
 
@@ -21,2120 +25,563 @@
 | 序号 | 题目 | 难度 | 类型 |
 |---|---|---|---|
 | Q1 | **RAG 全景：vs 长上下文、vs 微调、七种失败模式** | ⭐⭐⭐⭐⭐ | 必问 |
-| Q2 | **Chunking 策略** | ⭐⭐⭐⭐⭐ | 必问·实战 |
+| Q2 | **Chunking 策略** | ⭐⭐⭐⭐⭐ | 必问 + 实战 |
 | Q3 | **Embedding 选型与 ANN 索引（HNSW）** | ⭐⭐⭐⭐⭐ | 必问 |
 | Q4 | **混合检索与 RRF** | ⭐⭐⭐⭐⭐ | 必问 |
 | Q5 | **Rerank：Bi vs Cross vs ColBERT** | ⭐⭐⭐⭐⭐ | 必问 |
-| Q6 | **Query 改写、路由、HyDE** | ⭐⭐⭐⭐⭐ | 必问·实战 |
+| Q6 | **Query 改写、路由、HyDE** | ⭐⭐⭐⭐ | 实战 |
 | Q7 | 高级 RAG：GraphRAG / CRAG / Agentic | ⭐⭐⭐⭐ | 进阶 |
-| Q8 | **幻觉归因与 RAGAS 评估** | ⭐⭐⭐⭐⭐ | 必问·区分度高 |
+| Q8 | **幻觉归因与 RAGAS 评估** | ⭐⭐⭐⭐⭐ | 必问 |
 
 ---
 
-## Q1：RAG 全景——vs 长上下文、vs 微调、七种失败模式 ⭐⭐⭐⭐⭐（必问）
+## Q1：RAG 全景——vs 长上下文、vs 微调、七种失败模式 ⭐⭐⭐⭐⭐
 
 ### 🎯 一句话标答
 
-> RAG 解决的是**知识的时效性、私有性、可溯源性和更新成本**——**微调教"怎么做"（能力/风格），RAG 教"知道什么"（事实），两者互补而非二选一**；长上下文**不会杀死 RAG**（成本差 200 倍、"Lost in the Middle" 导致长上下文的有效召回率随长度下降、企业知识库是 TB 级），但它**改变了 RAG 的形态**——**chunk 可以更大、top-k 可以更多、对检索精度的要求下降了**；而 RAG 是**串行链条**，**七个环节各有各的失败模式**，面试的核心是"**你能不能定位到是哪一环**"。
+> RAG（📄 Lewis et al. 2020）在生成时检索外部文档，解决**私有性、时效性、可溯源、更新成本**的问题。它和微调互补：💭 微调更擅长改变"怎么做"（格式、风格、任务能力），RAG 更擅长提供"知道什么"（事实）。长上下文没有取代 RAG：📄 Li et al. 2024 发现资源充足时长上下文模型平均效果优于 RAG，但 RAG 便宜得多；📄 Xu et al. 2023 发现检索对长上下文模型同样有帮助。RAG 是串行链路，**每一环都有自己的失败模式，排查要先定位环节**。
 
-### 🗣️ 30 秒口语版
+### 📐 为什么要 RAG
 
-"这题要答三个层次：**为什么要 RAG、和长上下文/微调的关系、以及它的链路结构**。
+1. **私有知识**：企业内部文档，模型从未见过。
+2. **时效性**：模型知识停在训练截止时间。
+3. **可溯源 / 可审计**：能给出引用，在金融、法律、医疗等场景常是合规要求。
+4. **更新成本**：改一份文档，而不是重新训练模型。
+5. **减少幻觉**：有依据地回答，但**不能消除幻觉**（见追问）。
 
-**为什么要 RAG——五个理由，按重要性排**：
+### 📐 RAG vs 长上下文
 
-1. **私有知识**：企业内部文档，模型从没见过。这是 **RAG 在 B 端的立身之本**
-2. **时效性**：模型的知识截止在训练时
-3. **可溯源 / 可审计**：**能给出引用** —— 这在金融、法律、医疗是**合规硬要求**，不是"nice to have"
-4. **更新粒度**：改一个文档 vs 重训一个 70B。**成本差六个数量级**
-5. **减少幻觉**：有依据地回答（但**注意——RAG 不能消除幻觉**，Q8 会详谈）
+**成本**：🧮 如果每次查询都把 100 万 token 的语料放进上下文，prefill 计算至少按 token 数线性增长（attention 部分是二次的）；RAG 每次只放几千 token，成本可以相差两个数量级。
+> 💭 **这条论据在被削弱**：如果是同一份语料被反复询问，Prefix / Context Caching（第 12 章 Q7）可以摊销 prefill，剩下的主要是每次 decode 读长 KV 的访存成本。更准确的说法是：**语料大且常变 → RAG 占优；语料固定、可缓存、需要全局理解 → 长上下文更有竞争力**。
 
-**RAG vs 长上下文（当前最热的辩论，必须能答）**
+**有效利用率**：
+- 📄 **Lost in the Middle**（Liu et al., TACL 2024）：相关信息位于上下文中部时，模型利用它的能力明显下降，呈 U 形曲线（开头和结尾较好）。
+- 📄 **RULER**（Hsieh et al. 2024）：所测的号称支持 ≥32K 的模型里，只有约一半在 32K 长度上还能保持令人满意的表现。"支持 128K"不等于"在 128K 上好用"。
 
-有人说"上下文都 100 万了，还要 RAG 干嘛？"—— **不对，四个理由**：
+**规模与溯源**：企业知识库可能是 TB 级，远超任何上下文；RAG 天然知道每句话来自哪一段。
 
-**① 成本差两个数量级**（这条最硬）
-回忆第 12 章：**Prefill 是 compute-bound，耗时和输入长度<u>成正比</u>**。
-```
-长上下文：每个 query 都要 prefill ★100 万 token★
-RAG：     每个 query 只 prefill ★5000 token★
-→ ★成本和 TTFT 差 200 倍★（🧮 线性近似；attention 是 O(N²)，真实 TTFT 差距在超长输入下更大）
-```
-**而且这是<u>每个 query</u> 都要付的**，不是一次性的。
+📄 **实证对比**：
+- Xu et al. 2023（NVIDIA, ICLR 2024）：4K 上下文 + 检索可以达到与 16K 长上下文微调模型相当的效果；检索增强的 Llama2-70B-32K 在九个长上下文任务上平均优于 GPT-3.5-turbo-16k，也优于不带检索的同一模型。
+- Li et al. 2024（EMNLP 2024 Industry）：资源充足时长上下文平均优于 RAG，但 RAG 成本低得多；提出 **Self-Route**，由模型自我判断该走 RAG 还是长上下文，以较低成本接近长上下文的效果。
 
-> 💭 **但这条论据正在被削弱**：如果长上下文是**同一份语料反复问**，Prefix/Context Caching（第 12 章 Q7）可以把 prefill 摊销掉，剩下的是**每次 decode 都要读 100 万 token 的 KV**（memory-bound，第 12 章）——成本仍高，但远小于"每次重新 prefill"。所以更精确的说法是：**语料大且多变 → RAG 胜；语料固定、可缓存、需要全局理解 → 长上下文的竞争力上升**。
->
-> 📄 **实证对比**：
-> - Xu et al. 2023（NVIDIA, *Retrieval meets Long Context LLMs*, ICLR'24）：4K 上下文 + 检索可以接近 16K 长上下文微调模型的效果，且**检索对长上下文模型同样有帮助**——两者互补而非替代。
-> - Li et al. 2024（*Retrieval Augmented Generation or Long-Context LLMs?*, EMNLP'24 Industry）：资源充足时长上下文模型**平均效果优于 RAG**，但 RAG 便宜得多；他们提出 **Self-Route**——让模型先自判 RAG 能否回答，不能再走长上下文，以较低成本接近长上下文的效果。
-> - ❓ 开放问题：随着上下文成本下降，"检索"会不会退化为长上下文内部的一种注意力稀疏化？（相关：检索头 retrieval heads 的研究，Wu et al. 2024。）
+💭 **长上下文改变了 RAG 的形态**：上下文变长后，chunk 可以更大、top-k 可以更多，"宽召回、让模型自己筛"变得可行，对 rerank 精度的要求下降；主要矛盾转向**成本、延迟和摆放顺序**。
 
-**② "Lost in the Middle"**
-Liu et al. 2023 的经典发现：**信息在上下文<u>中间</u>时，模型的召回率显著下降**——呈 **U 形曲线**（开头和结尾好，中间塌陷）。
-而 **RULER** 这个 benchmark 更狠：**很多号称支持 128K 的模型，在 32K 就已经明显退化了**。
-$$\boxed{\text{"支持 128K" } \ne \text{ "在 128K 上好用"}}$$
+### 📐 RAG vs 微调
 
-**③ 规模**
-企业知识库是 **TB 级**。再长的上下文也塞不下。
-
-**④ 可溯源**
-RAG 天然知道"这句话来自哪个文档的哪一段"。长上下文塞进去，**你不知道模型在看哪里**。
-
-**但——长上下文<u>改变了</u> RAG 的形态（这是最重要的、也是最少人答出的一点）**：
-
-```
-【短上下文时代】4K 窗口
-  chunk = 512, top-3  →  1500 token
-  ★必须精准命中 top-3★ → rerank 压力巨大，chunk 切错就完蛋
-
-【长上下文时代】128K 窗口
-  chunk = 2000, top-20 → 40000 token
-  ★可以宽召回，让模型自己筛★ → 检索精度的要求下降了
-```
-
-$$\boxed{\text{长上下文和 RAG 是互补的：长上下文让 RAG 的 chunk 更大、top-k 更多、rerank 压力更小}}$$
-
-**RAG vs 微调**
-
-**经典类比**：**微调 = 上学（学能力），RAG = 开卷考试（查资料）**
-
-| | **微调** | **RAG** |
+| | 微调 | RAG |
 |---|---|---|
-| 教什么 | **怎么做**（风格、格式、领域术语、任务能力） | **知道什么**（事实、知识） |
-| 知识更新 | ❌ 要重训 | ✅ **改个文档** |
-| 可溯源 | ❌ | ✅ |
-| 推理成本 | ✅ **低**（不用塞长 context） | ❌ 高（每次都要塞） |
-| 学新格式 | ✅ | ❌ **几乎不行** |
+| 擅长 | 格式、风格、领域术语、任务能力 | 事实、知识 |
+| 知识更新 | 需要重新训练 | 改文档即可 |
+| 可溯源 | 否 | 是 |
+| 推理成本 | 不需要额外上下文 | 每次都要放入检索内容 |
 
-**关键：两者互补，不是二选一。** 生产上的典型配置是：
-> **微调一个"懂领域术语 + 输出格式对 + 会用工具"的模型 + RAG 提供事实**
+💭 判断：模型**不知道**某个事实 → RAG；**知道但答得不对**（格式、风格）→ 微调；**听不懂领域问题** → 微调甚至继续预训练。📄 第 7 章 Q6 讨论了"SFT 能否教新知识"：Gekhman et al. 2024 发现通过微调学习新知识较慢，且会增加幻觉倾向，这是"事实交给 RAG"的一个证据。
 
-**一个必须说清的辨析**：**"模型答不对，是该微调还是该 RAG？"**
-- **它不知道这个事实** → **RAG**
-- **它知道，但答得不对/格式不对/风格不对** → **微调**
-- **它连问题都听不懂（领域术语）** → **微调**（甚至要继续预训练）
+### 📐 七个环节的失败模式
 
-**最后：RAG 的链路结构——这是本章的组织框架**
+| # | 环节 | 典型失败 | 怎么查 |
+|---|---|---|---|
+| 1 | 解析 | PDF 表格乱码、多栏串行、扫描件没 OCR | **直接看入库的文本** |
+| 2 | 分块 | 切断语义；chunk 缺少上下文（"它"指谁） | 抽查 chunk 是否自包含 |
+| 3 | Embedding | 领域术语没见过；漏加 instruction 前缀；用错对称/非对称模型 | 测 Recall@k |
+| 4 | 检索 | 型号、错误码等精确匹配失败；索引参数太保守 | 测 Recall@k |
+| 5 | 融合/重排 | 相关文档被排到 top-k 之外 | 测 MRR / NDCG |
+| 6 | 组装 | 关键内容放在长上下文中部；上下文过长 | 检查摆放顺序 |
+| 7 | 生成 | 有依据仍编造；忽略上下文用参数知识 | 测 Faithfulness（Q8） |
 
-```
-【离线】文档 → 解析 → 分块 → Embedding → 向量库（+ BM25 索引）
-【在线】query → 改写/路由 → 检索(向量+BM25) → RRF 融合 → Rerank → 组装 prompt → LLM → 引用标注
-```
+> 💭 排查顺序：**先测检索**（Recall@k，免费且快），召回足够高再去看生成。召回只有 60% 时，调 prompt 救不回剩下的 40%。
 
-**RAG 是一条<u>串行</u>的链条——任何一环断了，整个就废。** 所以面试问"RAG 效果不好怎么办"，**考的是你能不能定位到哪一环**。"
-
-### 🔍 七个环节的失败模式（这张表是本章最实用的东西）
-
-| # | 环节 | **失败模式** | 症状 | 怎么查 |
-|---|---|---|---|---|
-| 1 | **解析** | PDF 表格解析成乱码、多栏排版串行、扫描件没 OCR | **答案在库里但检索不到** | **★直接看入库的文本长什么样★** |
-| 2 | **分块** | 把一个完整语义切断；chunk 缺上下文（"它"指谁？） | 检索到半截 | 抽查 chunk，看是否自包含 |
-| 3 | **Embedding** | 领域术语没见过；**忘了加 instruction prefix**；对称/非对称用错 | 语义相似但答案不在里面 | **测 Recall@k** |
-| 4 | **检索** | 精确匹配失效（型号、错误码）；ef_search 太小 | 召回不到 | **测 Recall@k**（同上） |
-| 5 | **融合/重排** | 排序错，好的被 top-k 截断 | 召回到了但没排上来 | **测 MRR / NDCG** |
-| 6 | **组装** | 相关内容放在 context **中间**（Lost in the Middle）；context 太长 | 检索对了但没用上 | 看 context 的摆放顺序 |
-| 7 | **生成** | 有依据但还是编；忽略 context 用参数知识 | **幻觉** | **测 Faithfulness**（Q8） |
-
-> 🚨 **面试的正确答法**：
->
-> **"我会<u>先测检索</u>——算 Recall@k。因为<u>检索的召回率是整个 RAG 的天花板</u>：检索不到的东西，prompt 调出花来也没用。**
->
-> **绝大多数人的第一反应是调 prompt，但那是第 7 环，通常也是最不可能的那一环。**
->
-> **如果 Recall@k 很高（>90%）但答案还是错，那才是生成的问题，去测 Faithfulness。"**
->
-> **这个"先测检索再调生成"的顺序，是这题最值钱的答案。**
-
-### 🔥 高频追问 Top 3
+### 🔥 高频追问
 
 **Q：RAG 能消除幻觉吗？**
 
-A：**不能，而且这是个必须打破的迷思。RAG 只是<u>改变了</u>幻觉的来源。**
+A：不能，它改变了幻觉的来源：
+1. **检索失败**：没检索到，模型只能靠参数知识或编造。
+2. **生成失败**：检索到了，但模型忽略、误读或"补充"了上下文中没有的信息。📄 Xie et al. 2024（*Adaptive Chameleon or Stubborn Sloth*, ICLR 2024）发现：外部证据连贯、有说服力时，模型会接受它，即使与自身记忆冲突；但当证据中有部分与自身记忆一致时，模型表现出强烈的确认偏误。
+3. **知识库本身有错**：RAG 会忠实地传播错误，而且因为有引用，看起来更可信。这只能靠数据治理。
 
-**RAG 引入了两种<u>新的</u>幻觉**（Q8 会详谈）：
+常用缓解手段：**要求逐句引用**（💭 编造的内容很难给出处，引用也让人可以核对，可配合约束解码保证格式）、**明确允许"无法回答"**（注意过度拒答）、**测 Faithfulness 并归因**（Q8）。
 
-1. **检索失败导致的幻觉**：没检索到 → 模型**只能编**。而且更糟的是——**检索到了<u>无关</u>的内容，会把模型带偏**！有时候"检索到垃圾"**比"什么都没检索到"更坏**。
-2. **生成失败导致的幻觉**：检索到了正确的内容，但模型：
-   - **忽略了它**，用自己的参数知识回答（**当 context 和模型的先验冲突时高发**！）
-   - **误读了它**
-   - **加戏**——在 context 的基础上"补充"了 context 里没有的信息
+**Q：无关的检索结果一定有害吗？**
 
-**第三种更隐蔽的**：**context 本身就是错的**（知识库里存的就是过时/错误的文档）→ **RAG 会忠实地传播错误**，而且**因为有引用，看起来更可信** —— 这是最危险的。
+A：证据比直觉复杂：
+- 📄 Shi et al. 2023（ICML）：在数学题描述中加入无关信息会让模型表现大幅下降；在 prompt 中要求忽略无关信息、自洽解码可以缓解。
+- 📄 Yoran et al. 2024（ICLR）：无关段落会降低检索增强模型的表现；用约 1000 条混有相关/无关上下文的数据微调，就能让模型对无关上下文鲁棒。
+- 📄 Cuconasu et al. 2024（*The Power of Noise*, SIGIR）：**看起来相关但不含答案的高分文档**最伤效果；反直觉的是，**加入随机文档**反而让准确率最多提升 35%。
 
-$$\boxed{\text{RAG 把"模型幻觉"变成了"系统幻觉"——链条变长了，出错的地方变多了}}$$
+💭 合理的读法：最危险的是"**相关但错误**"的上下文，而不是明显无关的噪声。这也是"不该检索时不要检索"（Q6 路由）和"用 rerank 分数做阈值丢弃"的依据。❓ 随机文档为什么有帮助，目前没有公认解释。
 
-**降低幻觉最有效的三招（按性价比排）**：
-1. **强制引用**（⭐ 最有效）：要求模型**每句话标出处** `[1][2]`。
-   - **为什么有效**：**"必须给引用"会<u>逼</u>模型真的去看 context** —— 编造的内容没法标引用
-   - 可以用**约束解码保证格式**（第 14 章 Q8）
-   - 而且**引用让人可以核对** —— 把"信任模型"变成"信任 + 验证"
-2. **允许说"不知道"**：prompt 里明确"如果 context 里没有，就说找不到"。
-   - ⚠️ 但要小心**过度拒答** —— 模型会变得过于保守
-3. **测 Faithfulness 并归因**（Q8）
+**Q：什么时候不该用 RAG？**
 
-**"RAG 不能消除幻觉，只是改变了它的来源；最有效的手段是强制引用，因为它逼模型真的去看 context"** —— 这个回答的层次感很好。
+A：闲聊（检索内容可能把模型带偏，"不检索"应该是路由的显式选项）；需要全局理解的问题（top-k 看不到全貌，见 Q7）；汇总统计（"有多少个 X"，应走 Text2SQL）；格式风格问题（应微调）；知识量很小（几十条 FAQ 直接放进 system prompt，还能吃到 Prefix Caching）。
 
-**Q：什么时候<u>不</u>该用 RAG？**
-
-A：**这题的反向思考能体现判断力，很加分。**
-
-| 场景 | 为什么不该 RAG | 该用什么 |
-|---|---|---|
-| **闲聊 / 通用问答** | 检索到无关内容**反而把模型带偏** | **不检索**（这是路由的一个选项！Q6） |
-| **需要全局理解**（"这本书的主旨"） | **top-k 检索永远看不到全貌** | **GraphRAG** 或长上下文（Q7） |
-| **汇总/统计**（"有多少个 X"） | 向量检索**没法做聚合** | **Text2SQL / 结构化查询** |
-| **风格/格式问题** | RAG 教不了格式 | **微调** |
-| **知识稳定 + 延迟敏感** | 每次塞 context 太贵 | **微调**（把知识"烧"进模型） |
-| **知识量小**（几十条 FAQ） | 引入检索是**过度工程** | **直接塞进 system prompt**（还能吃 Prefix Caching！） |
-
-> 🚨 **第一行是最重要的、也是最多人踩的坑**：**"不该检索的时候检索了"是 RAG 系统的一大失败来源。**
->
-> 用户说"你好"，你去检索，检索到一堆无关文档塞进 context → **模型被带偏，开始瞎聊产品**。
->
-> **所以"不检索"必须是路由的一个显式选项**（Q6）。**这正是你笔记里"query routing 是生产解法"那条经验的一个具体体现。**
-
-**最后一行也值得注意**：知识量小时，**直接塞 system prompt 反而更好** —— 因为 **system prompt 是固定前缀，能吃满 Prefix Caching**（第 12 章 Q7）！**TTFT 几乎为零，还没有检索的延迟和失败风险。**
-
-**Q：长上下文时代，RAG 的技术重心变了吗？**
-
-A：**变了，而且变化很大——这题能体现你跟进了前沿。**
-
-| | 短上下文时代（4K） | **长上下文时代（128K+）** |
-|---|---|---|
-| **chunk size** | 256-512（**必须小，塞不下**） | **1000-2000**（可以大） |
-| **top-k** | 3-5（**必须精准**） | **20-50**（可以宽召回） |
-| **rerank 的重要性** | ⭐⭐⭐⭐⭐ **生死攸关** | ⭐⭐⭐ **降级为"排序优化"** |
-| **chunking 的重要性** | ⭐⭐⭐⭐⭐ **切错就完蛋** | ⭐⭐⭐ **可以靠大 chunk 兜底** |
-| **主要矛盾** | **检索精度** | ⭐ **成本和延迟**（塞 40K 的 prefill 很贵） |
-| **新的重点** | — | ⭐⭐⭐⭐⭐ **Prefix Caching**（第 12 章 Q7） |
-
-**三个关键变化**：
-
-1. **检索精度的要求下降了** —— 以前必须精准命中 top-3，现在可以召回 top-30 让模型自己筛。**"宽召回 + 让模型筛" 成了新范式**。
-
-2. **成本成了主要矛盾** —— 塞 40K token 的 prefill 是真的贵（第 12 章）。
-   → **Prefix Caching 变成 RAG 的命门**：如果同一份文档被多个 query 命中，**它的 KV 可以复用**！
-   → **Contextual Retrieval 的成本也靠 Prompt Caching 压下来**（Q2）
-
-3. **"Lost in the Middle" 变成了新的约束** —— 塞 40K 进去，**摆放顺序**开始重要了：
-   - **最相关的放<u>开头和结尾</u>，不要放中间** ← 这是个**免费**的技巧，很多人不知道
-
-**面试的高阶答法**：
-> **"长上下文没有杀死 RAG，它把 RAG 的矛盾从'检索准不准'转移到了'塞进去多贵'。所以现在 RAG 的技术重心是：宽召回 + Prefix Caching + 注意摆放顺序，而不是死磕 rerank 的那零点几个点。"**
-
-### ⚠️ 常见陷阱
-
-1. **说"长上下文会取代 RAG"** —— **成本差 200 倍、Lost in the Middle、TB 级知识库、可溯源**。四条理由要能说。
-2. **说"RAG 消除幻觉"** —— **只是改变了来源**，还引入了新的（检索失败、context 本身错）。
-3. **把 RAG 和微调对立** —— **互补**：微调教怎么做，RAG 教知道什么。
-4. **一上来就调 prompt** —— **先测检索！Recall@k 是天花板。**
-5. **不知道"不检索"也是个选项** —— 闲聊时检索会**把模型带偏**。
-6. **不知道长上下文改变了 RAG 的形态** —— 这是当前最有区分度的一点。
-
-### 📚 延伸阅读
-- [RAG 原论文](https://arxiv.org/abs/2005.11401) - Lewis et al., NeurIPS 2020
-- [Lost in the Middle](https://arxiv.org/abs/2307.03172) - **U 形曲线，必读**
-- [RULER: What's the Real Context Size of Your Long-Context LMs?](https://arxiv.org/abs/2404.06654) - **"支持 128K ≠ 在 128K 上好用"的实证**
-- [Retrieval-Augmented Generation for LLMs: A Survey](https://arxiv.org/abs/2312.10997) - 最全的 RAG 综述
+### 📚 出处
+- Lewis et al. *Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks*. NeurIPS 2020. arXiv:2005.11401
+- Liu et al. *Lost in the Middle: How Language Models Use Long Contexts*. TACL 2024. arXiv:2307.03172
+- Hsieh et al. *RULER*. 2024. arXiv:2404.06654
+- Xu et al. *Retrieval meets Long Context Large Language Models*. ICLR 2024. arXiv:2310.03025
+- Li et al. *Retrieval Augmented Generation or Long-Context LLMs? A Comprehensive Study and Hybrid Approach*. EMNLP 2024 Industry. arXiv:2407.16833
+- Xie et al. *Adaptive Chameleon or Stubborn Sloth*. ICLR 2024. arXiv:2305.13300
+- Shi et al. *Large Language Models Can Be Easily Distracted by Irrelevant Context*. ICML 2023. arXiv:2302.00093
+- Yoran et al. *Making Retrieval-Augmented Language Models Robust to Irrelevant Context*. ICLR 2024. arXiv:2310.01558
+- Cuconasu et al. *The Power of Noise: Redefining Retrieval for RAG Systems*. SIGIR 2024. arXiv:2401.14887
+- Gao et al. *Retrieval-Augmented Generation for Large Language Models: A Survey*. 2023. arXiv:2312.10997
 
 ---
 
-## Q2：Chunking 策略 ⭐⭐⭐⭐⭐（必问·实战）
+## Q2：Chunking 策略 ⭐⭐⭐⭐⭐
 
 ### 🎯 一句话标答
 
-> 核心矛盾是 **"chunk 太小 → 语义不完整、缺上下文；chunk 太大 → embedding 被<u>稀释</u>"**——一个 2000 字的 chunk 讲了 5 件事，它的 embedding 是这 5 件事的"平均"，**对哪一件都不精确**；解法不是"找一个完美的 size"，而是**跳出这个二选一**：**Small-to-Big**（用小 chunk 检索、返回大 chunk 给 LLM）、**Contextual Retrieval**（用 LLM 给每个 chunk 加一段"它在全文中的位置"再 embedding，Anthropic 报告**失败率降 35%**）、**Late Chunking**（先对全文做 token-level embedding，**再** pooling 成 chunk）——三者都在解同一个问题：**让 chunk 既精确又有上下文**。
+> 核心矛盾：chunk 太小，语义不完整、缺少上下文；chunk 太大，**一个向量要概括多件事，对哪件都不够精确**（💭 常说的"embedding 被稀释"），而且塞给模型的噪声多。比起寻找完美的 size，更好的办法是跳出二选一：**Small-to-Big**（小块检索、大块返回）、📄 **Contextual Retrieval**（用 LLM 给每个 chunk 写一段上下文说明再索引，Anthropic 报告 top-20 检索失败率降低 35%，配合 BM25 降低 49%，再加 rerank 降低 67%）、📄 **Late Chunking**（先对全文做 token 级编码，再按 chunk 边界池化）。
 
-### 🗣️ 30 秒口语版
+### 📐 为什么 chunk 太大不好
 
-"先把**矛盾**讲清楚，方案才有意义。
+💭 embedding 把整个 chunk 压成一个向量。一个讲了五件事的长 chunk，其向量近似这五件事的某种"平均"；用户只问其中一件时，query 向量很"尖"，chunk 向量很"钝"，相似度不高。所以"chunk 大一点召回更全"并不成立。另外，即使检索到了，大量无关文本也会占用上下文、干扰生成。
 
-**核心矛盾**：
+### 📐 三种跳出二选一的方法
 
-**chunk 太小**：
-- ❌ **语义被切断**："...因此我们决定" | "终止该项目。" —— 切在中间，两半都没意义
-- ❌ **缺上下文**：chunk 里写"**它**的营收增长了 30%" —— **"它"是谁？** 这个 chunk 单独看毫无价值，但 embedding 的时候它就是单独的！
+**① Small-to-Big / 父文档检索**：索引时把文档切成小块（如 128 token）做向量，同时记录每个小块所属的大段落；检索用小块（精确），返回父段落（完整）。变体：索引摘要或"这段能回答的问题"，返回原文。
 
-**chunk 太大**：
-- ❌ **embedding 被<u>稀释</u>** ← **这是最关键的概念**
+**② Contextual Retrieval**（📄 Anthropic 2024）：对每个 chunk，把整篇文档和该 chunk 一起交给 LLM，生成一两句"这段在全文中的位置和主题"，prepend 到 chunk 前再做 embedding 和 BM25 索引。
 
-**什么叫"稀释"？** embedding 是把**整个 chunk 压成<u>一个</u>向量**。chunk 越长，这个向量越"**平均化**"：
+| 方案（📄 Anthropic 报告，top-20 检索失败率，基线 5.7%） | 失败率 | 相对降低 |
+|---|---|---|
+| Contextual Embeddings | 3.7% | 35% |
+| + Contextual BM25 | 2.9% | 49% |
+| + Rerank | 1.9% | 67% |
+
+> 💭 这是 Anthropic 在自选数据集上的博客结果，未经同行评审，迁移到你的语料需要重测。
+> 🧮 成本：每个 chunk 一次 LLM 调用。但整篇文档是**固定前缀**，只有"当前 chunk"在变，Prompt / Prefix Caching（第 12 章 Q7）可以让成本大幅下降。
+
+**③ Late Chunking**（📄 Günther et al. 2024, Jina）：把整篇长文档一次送入长上下文 embedding 模型，得到每个 token 的向量（它们都在全文的 attention 下计算），**再**按 chunk 边界做 mean pooling。不需要额外的 LLM 调用，前提是 embedding 模型支持足够长的输入。
+
+| | Contextual Retrieval | Late Chunking |
+|---|---|---|
+| 怎么加上下文 | LLM 显式写一段文字 | attention 隐式注入 |
+| 额外成本 | LLM 调用（可被缓存摊薄） | 几乎为零 |
+| 限制 | 无文档长度限制 | 受 embedding 模型窗口限制 |
+| BM25 是否受益 | **是**（加的是文字） | 否（只改向量） |
+| 可解释性 | 能看到加了什么 | 黑盒 |
+
+### 📐 Chunking 策略一览
+
+| 策略 | 做法 | 评价 |
+|---|---|---|
+| 固定长度 + overlap | 每 N token 切，重叠 10–20% | 基线，容易切断语义 |
+| 递归字符分割 | 按段落 → 换行 → 句子 → 空格逐级降级 | 简单实用，常见默认 |
+| **结构感知** | Markdown 按标题、代码按函数/类、PDF 按段落/表格、法规按条款 | 💭 往往是性价比最高的一步 |
+| 语义分块 | 相邻句子 embedding 相似度骤降处切分 | 慢 |
+| 命题分块 | LLM 拆成原子命题（📄 Chen et al. 2024, *Dense X Retrieval*） | 精度高、成本高 |
+| Small-to-Big | 小块检索、大块返回 | 推荐 |
+| Contextual Retrieval | LLM 补上下文 | 高价值语料 |
+| Late Chunking | 先全文编码、后池化 | 需长上下文 embedding |
+
+💭 **结构感知被低估**：把 Markdown 的标题层级 prepend 到每个 chunk，相当于免费版的 Contextual Retrieval；表格整张作为一个 chunk；对话按话轮切并保留说话人。
+
+### 🔥 高频追问
+
+**Q：overlap 有用吗？**
+
+A：它防止关键句恰好被切在两块中间，代价是存储和向量数增加、检索结果重复（需要去重，还会挤占 rerank 名额）。💭 常见取 10–20%。如果分块是结构感知的、切在天然边界上，overlap 的必要性就小得多：**overlap 主要是给固定长度切分打的补丁**。
+
+**Q：表格、图片、代码怎么处理？**
+
+A：💭 通用原则是 **"索引一个适合检索的表示，返回一个适合阅读的表示"**：
+- **表格**：整表保留为 Markdown；另存一段 LLM 生成的自然语言描述用于检索；结构化数据进数据库，聚合类问题走 Text2SQL。
+- **图片**：用视觉语言模型生成描述，索引描述、返回图片；或用多模态 embedding（CLIP 类）直接检索。
+- **代码**：按 AST 切到函数/类，prepend 文件路径、类名、import；索引签名和 docstring，返回完整函数。
+
+**Q：实现上有哪些常见坑？**
+
+A：长度按 **token** 而不是字符计算；中文要在分隔符里加入"。"等中文标点，否则递归分割会一路降级到按字符切；表格不要被切开。
+
+### 📚 出处
+- Anthropic. *Introducing Contextual Retrieval*. 2024（博客）
+- Günther et al. *Late Chunking: Contextual Chunk Embeddings Using Long-Context Embedding Models*. 2024. arXiv:2409.04701
+- Chen et al. *Dense X Retrieval: What Retrieval Granularity Should We Use?* EMNLP 2024. arXiv:2312.06648
+
+---
+
+## Q3：Embedding 选型与 ANN 索引（HNSW） ⭐⭐⭐⭐⭐
+
+### 🎯 一句话标答
+
+> 检索用的 embedding 模型是 **bi-encoder**：query 和文档分别编码，文档向量可以离线算好，所以快；代价是两者从不交互，**文档被压缩时还不知道 query 会问什么**，这是精度受限的根源，也是 rerank 存在的理由（Q5）。选型要点：用为**非对称检索**（问题 → 段落）训练的模型；按模型说明加 instruction / 前缀；不要只看 MTEB 榜单，要在自己的数据上测。索引方面，📄 **HNSW** 是中等规模的常用选择，`ef_search` 是运行时调节召回与延迟的旋钮；更大规模用 IVF-PQ 或 DiskANN 等。
+
+### 📐 对称 vs 非对称检索
+
+| | 对称 | 非对称 |
+|---|---|---|
+| 场景 | 句子相似度、找重复问题 | **问题 → 文档段落**（RAG） |
+| 两侧 | 同类型 | 疑问句 vs 陈述段落 |
+| 前缀 | 通常不需要 | 很多模型要求 query 侧加前缀 |
+
+📄 例如 BGE 系列建议在检索任务的 query 侧加一段指令前缀、文档侧不加；E5 系列要求两侧分别加 `query: ` 和 `passage: `。💭 漏加或加错会明显掉点，具体规则以模型卡为准。这个"query 和文档天然不同构"的问题，也是 HyDE（Q6）想解决的。
+
+### 📐 选型
+
+- 📄 **BGE-M3**（Chen et al. 2024）：一个模型同时输出 dense、sparse（词级权重）和多向量（ColBERT 式）三种表示，支持多语言和长输入。
+- 中文常用 BGE、GTE 等；商用有 OpenAI、Cohere、Voyage 等。💭 排行榜（MTEB）有过拟合的风险，排名靠前的模型在你的领域不一定最好，**以自己的 Recall@k 为准**。
+- 📄 **BEIR**（Thakur et al. 2021）：在 18 个异构数据集上的零样本评测显示，BM25 是很强的基线，不少稠密检索模型在域外泛化不如它。这是 Q4 混合检索的背景之一。
+
+### 📐 维度与 Matryoshka 表示
+
+🧮 存储：1000 万个向量，fp32 下 768 维约 31 GB，1024 维约 41 GB，3072 维约 123 GB。维度越高成本线性增长，💭 收益通常递减。
+
+📄 **Matryoshka Representation Learning**（Kusupati et al., NeurIPS 2022）：训练时让向量的**前 $k$ 维**本身就是可用的表示，于是一个模型可以按需截断维度；OpenAI 的 text-embedding-3 支持指定输出维度。典型用法是两阶段检索：用低维向量在全库粗筛，再用全维向量精排少量候选（与"召回 → 精排"是同一个思路）。
+
+### 📐 HNSW
+
+📄 Malkov & Yashunin（TPAMI 2018）：多层近邻图，类似跳表。上层稀疏、边长，用于快速接近目标区域；底层包含全部点，用于精细搜索。搜索时从顶层入口贪心下降，到底层后维护一个大小为 `ef_search` 的候选池做宽度搜索。
+
+| 参数 | 含义 | 影响 |
+|---|---|---|
+| `M` | 每个节点的邻居数 | 召回和内存都随之上升 |
+| `ef_construction` | 建索引时的候选池 | 索引质量 vs 建索引时间 |
+| `ef_search` | 查询时的候选池 | **运行时**召回 vs 延迟 |
+
+🧮 **图的内存**：底层每个节点约存 $2M$ 个 4 字节邻居 id。$M=16$ 时约 128 B/向量，相对 1024 维 fp32 向量（4 KB）只占约 3%；向量维度越低，图的占比越高。
+> ❌ 旧版写"M=32 时图的内存约等于向量本身的一半"，对常见的高维向量不成立。
+
+其他代价：删除会让图退化，需要定期重建；建索引较慢。
+
+| 索引 | 适用规模（💭 量级） | 特点 |
+|---|---|---|
+| Flat（暴力） | 十万级以下 | 精确，几毫秒，无需额外组件 |
+| HNSW | 十万到千万级 | 召回高，内存大 |
+| IVF / IVF-PQ | 更大规模 | 压缩向量，召回有损 |
+| DiskANN（Subramanya et al., NeurIPS 2019） | 十亿级 | 图放 SSD |
+
+### 🔥 高频追问
+
+**Q：为什么向量检索做不好精确匹配？**
+
+A：💭 embedding 编码的是"关于什么"，而型号 `XR-2000P` 与 `XR-2000S`、错误码 `E4032`、罕见人名的区别是**符号层面**的；切分成子词后前几个片段完全相同，向量几乎一样。**否定**（"不含糖" vs "含糖"）同样容易被压近，因为两者讨论的是同一话题。解法：BM25、元数据过滤、混合检索（Q4）。
+
+**Q：向量库怎么选？**
+
+A：💭 按数据量和已有技术栈：数据量不大且已用 Postgres，用 pgvector（事务、备份、权限、和业务表 JOIN 都现成）；已用 Elasticsearch，就在 ES 里加向量字段，BM25 和向量在同一个系统里；Faiss 是库而非服务；千万级以上、需要分布式或复杂过滤时再考虑 Milvus、Qdrant 等专用系统。**不要为了少量数据引入一个分布式向量库。**
+
+### 📚 出处
+- Malkov & Yashunin. *Efficient and Robust Approximate Nearest Neighbor Search Using HNSW Graphs*. TPAMI 2018. arXiv:1603.09320
+- Chen et al. *BGE M3-Embedding*. 2024. arXiv:2402.03216
+- Kusupati et al. *Matryoshka Representation Learning*. NeurIPS 2022. arXiv:2205.13147
+- Thakur et al. *BEIR*. NeurIPS 2021 Datasets and Benchmarks. arXiv:2104.08663
+- Muennighoff et al. *MTEB: Massive Text Embedding Benchmark*. EACL 2023. arXiv:2210.07316
+
+---
+
+## Q4：混合检索与 RRF ⭐⭐⭐⭐⭐
+
+### 🎯 一句话标答
+
+> 向量检索擅长语义匹配（"怎么退货" ↔ "退换货流程"），BM25 擅长精确符号（型号、错误码、人名、否定词），两者互补。融合时**不同检索器的分数不可比**：余弦相似度有界且常挤在窄区间，BM25 无界且依赖文档长度和词频，min-max 归一化又容易被离群值破坏。📄 **RRF**（Cormack et al., SIGIR 2009）只用排名：$\text{RRF}(d)=\sum_r \frac{1}{k+\text{rank}_r(d)}$，$k=60$。排名没有量纲，天然可比。
+
+### 📐 为什么不能直接加权相加分数
+
+🧮 min-max 归一化被离群值破坏的例子：一批 BM25 分数为 [47.3, 3.1, 2.9, 2.8, 2.7]，归一化后变成 [1.0, 0.009, 0.004, 0.002, 0.0]，后四个的区分度几乎消失。
+
+### 📐 RRF 与 $k$ 的作用
+
+$$\text{RRF}(d) = \sum_{r \in \text{rankers}} \frac{1}{k + \text{rank}_r(d)}$$
+
+- 🧮 $k=60$ 时第 1 名与第 2 名的得分是 $1/61$ 与 $1/62$，只差约 1.6%；$k=0$ 时是 1 与 0.5。
+- $k$ 越大，各名次差距越小，越看重"**被多个检索器同时召回**"；$k$ 越小，越看重某个检索器的头部。
+- 🧮 例如 $k=60$ 时，在两路中都排第 5 的文档得分 $2/65 \approx 0.0308$，高于只在一路中排第 1 的 $1/61 \approx 0.0164$。
+- 实现细节：rank 从 1 开始；某路没召回的文档不参与该路求和。
+
+💭 **"相对优于绝对"**在本书多次出现：PPO/GRPO 的优势函数（第 9、11 章）、min-p 的相对阈值（第 14 章 Q1）、RRF 的排名、LLM 评审的成对比较（第 19 章）。共同原因是绝对量的尺度依赖场景、容易被离群值破坏，相对量更稳健。
+
+### 📐 BM25
+
+$$\text{BM25}(q,d) = \sum_i \text{IDF}(q_i)\cdot\frac{f(q_i,d)(k_1+1)}{f(q_i,d) + k_1\left(1-b+b\frac{|d|}{\text{avgdl}}\right)}$$
+
+- **IDF**：罕见词权重高。
+- **$k_1$（常取 1.2–2.0）控制词频饱和**：🧮 $f\to\infty$ 时该项趋于 $k_1+1$，出现 100 次并不比 10 次重要多少；TF-IDF 的线性词频则容易被关键词堆砌利用。
+- **$b$（常取 0.75）控制文档长度归一化**，避免长文档天然占优。
+
+### 📐 标准流水线
+
 ```
-一个 2000 字的 chunk 讲了 5 件事：
-  A: 公司历史  B: 产品线  C: Q2 营收  D: 竞争对手  E: 未来规划
-  
-它的 embedding ≈ (A + B + C + D + E) / 5   ← ★对哪一件都不精确★
-
-用户问 "Q2 营收多少?"
-→ query 的 embedding 很"尖"（只指向 C）
-→ chunk 的 embedding 很"钝"（是 5 件事的平均）
-→ ★相似度不高 → 检索不到！★
+query ─┬─ 向量检索 top-50 ─┐
+       └─ BM25 top-50     ─┴─ RRF 融合 → top-20 → rerank → top-5 → LLM
+          宽召回             廉价粗排            昂贵精排
 ```
 
-**这个"稀释"的直觉是本题的题眼** —— 它解释了为什么"chunk 大一点召回更全"是**错的**。
+💭 **融合和 rerank 只能重排，不能凭空找回第一阶段漏掉的文档**，所以第一阶段要宽。多返回一些候选对 HNSW 和 BM25 几乎不增加成本，真正的成本在 rerank，RRF 正好充当免费的粗排。
 
-- ❌ **噪声多**：就算检索到了，塞给 LLM 的 2000 字里有 1600 字是无关的 → **稀释 attention，还占 context**
+### 🔥 高频追问
 
-**所以经典答案是"找个甜点"：256-512 token + 10-20% overlap。**
+**Q：BGE-M3 的稀疏输出能取代 BM25 吗？**
 
-**但真正的高手是<u>跳出这个二选一</u>——三个方案：**
+A：📄 BGE-M3 的稀疏表示给每个 token 学一个权重，可以覆盖部分同义词。💭 但它基于模型的词表，罕见型号会被切成多个子词；BM25 零训练、不需要 GPU、有成熟的倒排索引工程。实践中可以让 M3 的 dense 和 sparse 先融合，再与 BM25 做 RRF。
 
-**① Small-to-Big / Parent Document Retriever（最实用）**
-> **用小 chunk 检索（精确），返回大 chunk 给 LLM（完整）**
+**Q：要不要给各路检索器调权重？**
 
-```
-索引时：把文档切成 128 token 的小块 → embedding
-        同时记录每个小块的 ★parent★（它所在的整个 section，2000 token）
+A：💭 RRF 的优点是基本不用调参。全局固定权重在一类 query 上调好，换一类就不对了；与其调权重，不如**按 query 类型路由**（Q6）：错误码查询以 BM25 为主，语义问题以向量为主。更进一步可以用 learning-to-rank 学一个融合模型，对多数 RAG 场景属于过度工程。
 
-检索时：用小块检索 → ★精确命中★
-返回时：返回它的 parent → ★上下文完整★
+### 📚 出处
+- Cormack, Clarke, Büttcher. *Reciprocal Rank Fusion Outperforms Condorcet and Individual Rank Learning Methods*. SIGIR 2009
+- Robertson & Zaragoza. *The Probabilistic Relevance Framework: BM25 and Beyond*. FnTIR 2009
+- Chen et al. *BGE M3-Embedding*. arXiv:2402.03216
 
-→ ★两个都要，不用二选一！★
-```
-变体：**检索"摘要"或"假设问题"，返回原文** —— 同一个思想。
+---
 
-**② Contextual Retrieval（Anthropic, 2024）**
-> **用 LLM 为每个 chunk 生成一段"它在全文中的位置和作用"，<u>prepend 到 chunk 前面</u>再做 embedding**
+## Q5：Rerank——Bi vs Cross vs ColBERT ⭐⭐⭐⭐⭐
 
-```
-原 chunk: "营收增长了 30%，主要来自企业客户。"
-          ↑ 单独看：★它是谁？哪个季度？★ 这个 embedding 是垃圾
+### 🎯 一句话标答
 
-加上 context:
-"【本段出自 ACME 公司 2023 Q2 财报，讨论的是营收表现】
- 营收增长了 30%，主要来自企业客户。"
-          ↑ ★现在这个 embedding 有意义了★
-```
+> **Bi-encoder** 在看到 query 之前就把文档压成一个向量（"先压缩后匹配"）；**cross-encoder** 把 query 和文档拼在一起过模型，每个 token 互相 attend（"边看边匹配"），更准，但不能预计算，只能用于少量候选；📄 **ColBERT**（late interaction）为文档的每个 token 存一个向量，检索时对每个 query token 取与文档 token 的最大相似度再求和（MaxSim），精度接近 cross-encoder、文档侧仍可预计算，代价是存储（📄 ColBERTv2 用残差压缩把空间降低 6–10×）。标准架构：**bi-encoder + BM25 宽召回 → cross-encoder 精排**。
 
-**Anthropic 报告的数据（要能背）**：
-| 方案 | 检索失败率降低 |
-|---|---|
-| Contextual **Embedding** | **35%** |
-| \+ Contextual **BM25** | **49%** |
-| \+ **Rerank** | **67%** |
+### 📐 三者对比
 
-**成本？** 每个 chunk 都要过一次 LLM。但——**用 Prompt Caching 可以极便宜**！
+$$\text{Bi: } \cos(\text{Enc}(q), \text{Enc}(d)),\quad \text{Cross: } f([q; d]),\quad \text{ColBERT: } \sum_{i\in q}\max_{j\in d} E_{q_i}\cdot E_{d_j}$$
 
-> 💡 **注意这里**：**整个文档是<u>固定前缀</u>，只有"当前是哪个 chunk"在变** → **Prefix Caching 命中率接近 100%**（第 12 章 Q7）！
->
-> **第 12 章的技术，在这里成了让第 16 章的方案<u>经济上可行</u>的前提。** 这个跨章的连接很漂亮。
+| | Bi-encoder | ColBERT | Cross-encoder |
+|---|---|---|---|
+| 交互 | 只有最后的点积 | token 级 MaxSim | 每层全 attention |
+| 文档侧预计算 | 1 个向量 | 每 token 1 个向量 | 不能 |
+| 存储 | 小 | 大（可压缩） | 无 |
+| 精度 | 基线 | 接近 cross | 最高 |
+| 用途 | 全库召回 | 召回或重排 | 少量候选精排 |
 
-**③ Late Chunking（2024，最优雅）**
-> **先对<u>整篇长文档</u>做 embedding，拿到 token-level 的向量，<u>然后</u>再按 chunk 边界 pooling**
+💭 **信息瓶颈的视角**：bi-encoder 的上限是"一个 $d$ 维向量能表达多少与未知 query 相关的信息"；ColBERT 把瓶颈放宽到"每个 token 一个向量"，但交互仍浅；cross-encoder 在已知 query 的前提下阅读文档，没有提前压缩这一步。
 
-```
-【传统 Chunking】
-  切成 chunk → 每个 chunk ★独立★ embedding
-  → 每个 chunk 的 embedding ★只看得到自己★ ❌
+### 📐 组装 prompt 的免费技巧
 
-【Late Chunking】
-  ★整篇文档★ 一次过 embedding 模型（需要长上下文的 embedding 模型，如 jina-embeddings-v3）
-  → 拿到每个 token 的 embedding（★它们都是在全文的 attention 下算出来的！★）
-  → ★然后★ 按 chunk 边界做 mean pooling
-  → 每个 chunk 的 embedding ★天然带着全文的上下文★ ✅
-```
+1. **摆放顺序**：💭 依据 Lost in the Middle 的 U 形曲线，把最相关的文档放在开头和结尾，次要的放中间。
+2. **加元数据**：来源、章节、日期，让模型能引用、判断时效和权威性。
+3. **明确指令**：只依据给定文档；逐句标注来源编号；没有相关信息时明确说明。
+4. **检索结果放在 prompt 末尾附近**：system、工具描述、示例等固定内容放前面，每次都变的检索结果放后面，否则会破坏 Prefix Caching（第 12 章 Q7）。
 
-**为什么优雅**：它**不需要额外的 LLM 调用**（不像 Contextual Retrieval），**用 attention 机制天然地把上下文注入了每个 token**。
+### 🔥 高频追问
 
-**但前提**：需要一个**支持长上下文的 embedding 模型**（8K+）。
+**Q：能用 LLM 做 rerank 吗？**
 
-**最后一句（必须说）**：
-> **"chunk size 没有普适最优。256 是经验起点，但<u>必须在你的评测集上调</u>——法律条文、代码、对话记录、财报，最优的 chunk 完全不同。"**"
+A：可以，三种方式：
+- **Pointwise**：逐个打相关性分。简单可并行，但 💭 分数不校准。
+- **Pairwise**：两两比较，更稳但调用次数多。
+- **Listwise**：📄 RankGPT（Sun et al., EMNLP 2023）一次给模型一组文档让它输出排序，用滑动窗口处理长列表，报告经过合适指令的 GPT-4 在主流 IR 基准上可以达到甚至超过当时有监督的 SOTA；还把排序能力蒸馏到 440M 的小模型，在 BEIR 上超过 3B 的有监督模型。
 
-### 🔍 Chunking 策略全览
+💭 LLM rerank 适合高价值、低 QPS、延迟预算宽松的场景（法律、医疗、深度研究）；一般场景先用专门的 cross-encoder reranker。
 
-| 策略 | 做法 | 优点 | 缺点 | 适用 |
+**Q：rerank 太慢怎么办？**
+
+A：💭 按收益排序：
+1. **缩小候选数**：用 RRF 先粗排，把要精排的候选从上百个降到几十个。
+2. **批处理**：🧮 很多实现逐条循环调用 reranker，每次 batch=1，严重访存受限（第 12 章 Roofline）；一次性把所有 (q, d) 对打包前向，权重只读一次，被整个 batch 摊薄。
+3. **用更小的模型**、截断文档长度、缓存重复的 (q, d) 对。
+4. 换 ColBERT，文档侧预计算，代价是存储。
+
+### 📚 出处
+- Khattab & Zaharia. *ColBERT*. SIGIR 2020. arXiv:2004.12832
+- Santhanam et al. *ColBERTv2*. NAACL 2022. arXiv:2112.01488
+- Nogueira & Cho. *Passage Re-ranking with BERT*. 2019. arXiv:1901.04085
+- Sun et al. *Is ChatGPT Good at Search? Investigating Large Language Models as Re-Ranking Agents*（RankGPT）. EMNLP 2023. arXiv:2304.09542
+
+---
+
+## Q6：Query 改写、路由、HyDE ⭐⭐⭐⭐
+
+### 🎯 一句话标答
+
+> 用户的 query 常常不适合直接检索。**多轮对话中的指代必须消解**（"它的价格呢？"单独检索几乎没有意义，而且不会报错，只是默默变差）。📄 **HyDE**（Gao et al., ACL 2023）让 LLM 先写一段假想答案，用它的 embedding 去检索：假想答案的事实可能是错的，但它的句式、术语、话题与真实文档相似，💭 相当于把"问题 → 段落"的非对称检索转成"段落 → 段落"的对称检索。**路由**决定每类 query 走哪条路，其中"不检索"必须是显式选项。
+
+### 📐 改写技术
+
+| 技术 | 做法 | 额外开销 | 用途 |
+|---|---|---|---|
+| 指代消解 | 结合历史改写为独立 query | 1 次（小）模型调用 | **多轮必需** |
+| HyDE（📄 Gao et al. 2023） | 生成假想答案，用它检索 | 1 次 LLM 调用 | 零样本、embedding 未在领域微调时 |
+| Query2doc（📄 Wang et al. 2023） | 生成伪文档拼接到 query 上（也用于 BM25） | 1 次 LLM 调用 | 同上 |
+| Multi-Query / RAG-Fusion | 生成多个改写，分别检索，RRF 融合 | 1 次 LLM + N 次检索 | 表述差异大时提高召回 |
+| 分解 | 复杂问题拆成子问题 | 1 次 LLM + N 次检索 | 多跳、对比 |
+| Step-back（📄 Zheng et al., ICLR 2024） | 先问一个更抽象的问题检索背景知识 | 额外调用 | 需要原理性背景时 |
+
+💭 **每个技巧都要付延迟**。指代消解在关键路径最前面，它的延迟会直接加到 TTFT 上，适合用小模型甚至规则先过滤（只对含代词或过短的 query 改写）。HyDE、Multi-Query 只有在评测证明有收益时才上，并且最好由路由决定是否启用。
+
+### 📐 路由
+
+| Query 类型 | 例子 | 策略 |
+|---|---|---|
+| 事实查询 | "退货政策是什么" | 向量 + BM25 混合 |
+| 精确查找 | "错误码 E4032" | BM25 为主 / 元数据过滤 |
+| 关系、全局 | "这批报告的主要主题" | GraphRAG 或摘要索引（Q7） |
+| 汇总统计 | "有多少客户在用 X" | Text2SQL |
+| 时效性 | "最新政策" | 时间过滤 |
+| 闲聊 | "你好" | **不检索** |
+| 需要计算 | "去年增长率" | 工具调用（第 17 章） |
+
+实现：规则（正则识别错误码等，零成本）+ 小分类模型（毫秒级）为主，复杂情况再用 LLM 分类。
+
+### 🔥 高频追问
+
+**Q：路由分错了怎么办？**
+
+A：两类错误都不便宜：该检索没检索 → 模型凭参数知识编；不该检索却检索 → 可能被看起来相关但错误的内容带偏（Q1 追问）。兜底手段：
+1. **软路由**：检索后用 rerank 分数做阈值，最高分都很低就丢弃检索结果。💭 这比只看 query 猜意图更可靠，因为它基于实际检索结果。
+2. **prompt 兜底**：说明"以下文档可能不相关，不相关时请忽略"。📄 Shi et al. 2023 发现在 prompt 中加入忽略无关信息的指令能缓解干扰。
+3. **交给模型决定**：把检索做成工具，由模型决定是否、何时、检索什么（Agentic RAG，Q7 和第 18 章）。
+
+**Q：HyDE 什么时候不值得？**
+
+A：💭 embedding 模型已经在你的领域针对性微调过、query 与文档的表述差异不大时，收益小，不值得多一次 LLM 调用的延迟。生成多个假想答案取平均向量、并与原 query 向量混合，可以降低假想跑偏的风险。
+
+### 📚 出处
+- Gao et al. *Precise Zero-Shot Dense Retrieval without Relevance Labels*（HyDE）. ACL 2023. arXiv:2212.10496
+- Wang et al. *Query2doc: Query Expansion with Large Language Models*. EMNLP 2023. arXiv:2303.07678
+- Zheng et al. *Take a Step Back: Evoking Reasoning via Abstraction in Large Language Models*. ICLR 2024. arXiv:2310.06117
+- Rackauckas. *RAG-Fusion: a New Take on Retrieval-Augmented Generation*. 2024. arXiv:2402.03367
+
+---
+
+## Q7：高级 RAG——GraphRAG / CRAG / Agentic ⭐⭐⭐⭐
+
+### 🎯 一句话标答
+
+> 📄 **GraphRAG**（Edge et al. 2024, Microsoft）用 LLM 从文本中抽取实体和关系建图，用 Leiden 算法做层次社区检测，为每个社区生成摘要；回答"整个语料讲了哪些主题"这类全局问题时，对社区摘要做 map-reduce——这类问题 top-k 检索从范式上就答不了。代价是索引成本高、更新困难。📄 **CRAG**（Yan et al. 2024）用一个轻量评估器判断检索质量，差时改用网页搜索；📄 **Self-RAG**（Asai et al., ICLR 2024）训练模型输出反思 token 自行决定检索与否。**Agentic RAG** 把检索做成工具，由模型多轮决定查什么、够不够。💭 多数场景先把"结构感知分块 + 混合检索 + rerank + 改写"做好，高级方案按 query 类型通过路由启用。
+
+### 📐 GraphRAG 为什么能回答全局问题
+
+🧮 一份约 25 万 token 的报告，top-5 个 512 token 的 chunk 只覆盖约 1%。问"主题是什么"，问题不在检索精度，而在 **top-k 采样本身覆盖不到全貌**。
+
+GraphRAG 的 **Global Search**：① 每个社区摘要与 query 一起交给 LLM，生成部分答案并打相关性分（map，可并行）；② 按分数汇总部分答案生成最终答案（reduce）。💭 这是"用层次化的压缩结构换取覆盖率"。**Local Search** 从实体出发沿图扩展邻居，适合"A 和 B 是什么关系"。
+
+📄 论文报告：在百万 token 量级的语料上，对全局性问题，GraphRAG 生成的答案在全面性和多样性上明显优于普通 RAG。
+
+### 📐 对比
+
+| | GraphRAG | CRAG | Self-RAG | Agentic RAG |
 |---|---|---|---|---|
-| **固定长度 + overlap** | 每 512 token 切，重叠 10-20% | 简单 | **无脑切断语义** | baseline |
-| **递归字符分割** | 按 `["\n\n","\n",". "," "]` **层层降级** | ✅ **性价比之王** | 不懂语义 | **LangChain 默认，先用这个** |
-| **结构感知** ⭐ | markdown 按标题、代码按函数、PDF 按段落/表格 | ✅ **尊重文档本身的结构** | 要写解析器 | **实践中最有效** |
-| **语义分块** | 算相邻句子的 embedding 相似度，在**断崖处**切 | 语义完整 | **慢**（要 embed 每句） | 文档结构混乱时 |
-| **命题分块** | 用 LLM 拆成**原子命题** | 精度最高 | **极贵** | 高价值小语料 |
-| **★Small-to-Big★** | **小块检索，大块返回** | ✅ **两全其美** | 要维护父子关系 | ⭐ **强烈推荐** |
-| **★Contextual Retrieval★** | LLM 给每块加**全文上下文** | ✅ **失败率 -35%** | LLM 成本（**靠 Prefix Caching 压**） | ⭐ 高价值语料 |
-| **★Late Chunking★** | **先全文 embed，后 pooling** | ✅ **零额外 LLM 成本** | 需长上下文 embedding 模型 | ⭐ 最优雅 |
+| 核心 | 实体图 + 社区摘要 | 检索评估器 + 网页搜索兜底 | 反思 token | 检索即工具 + 循环 |
+| 是否改模型 | 否 | 训练一个小评估器 | **需要训练生成模型** | 否 |
+| 索引成本 | 高 | 正常 | 正常 | 正常 |
+| 查询成本 | 中 | 中 | 低 | 高（多轮） |
+| 解决 | 全局、多跳问题 | 检索质量不稳 | 何时检索 | 复杂、多步任务 |
 
-> 🚨 **"结构感知"这一行被严重低估** —— **最有效的 chunking 往往不是什么高级算法，而是"尊重文档本身的结构"**：
-> - Markdown → 按 `##` 标题切，**把标题层级 prepend 到每个 chunk**（穷人版的 Contextual Retrieval！）
-> - 代码 → 按函数/类切（用 AST，不是正则）
-> - PDF 表格 → **整张表作为一个 chunk，不要切开**
-> - 法律 → 按条款
-> - 对话记录 → 按话轮，**保留说话人**
->
-> **在做任何高级方案之前，先确保你没在无脑地按 512 字硬切一个有清晰结构的文档。**
+### 🔥 高频追问
 
-### 💻 关键代码
+**Q：GraphRAG 什么时候值得，有没有更便宜的替代？**
 
-```python
-# ---- ① 递归分割（先用这个，性价比最高）----
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+A：💭 值得的条件：语料相对静态、高价值、有大量全局/关系类问题、规模适中。FAQ 和客服知识库通常以事实查询为主，普通 RAG 就够。便宜的替代：全局问题 → 为每篇文档生成摘要并检索摘要；关系问题 → 多跳检索或 Agentic RAG；实体查询 → 实体抽取 + 元数据过滤。降本手段：小模型抽实体；只对核心文档建图；抽取 prompt 的固定前缀可以吃到 Prefix Caching。
 
-splitter = RecursiveCharacterTextSplitter(
-    chunk_size=512,
-    chunk_overlap=64,                        # ~12%
-    separators=["\n\n", "\n", "。", ". ", " ", ""],  # ← ★中文要加"。"★
-    length_function=lambda x: len(tokenizer.encode(x)),  # ← ★按 token 不是字符！★
-)
+**Q：Agentic RAG 的成本怎么控制？**
 
-# ---- ② Small-to-Big ----
-class SmallToBigRetriever:
-    def index(self, doc):
-        sections = split_by_heading(doc)          # 大块：2000 token
-        for sec_id, section in enumerate(sections):
-            self.parents[sec_id] = section
-            for small in split_fine(section, 128):  # 小块：128 token
-                self.vs.add(embed(small), meta={"parent": sec_id})
+A：设迭代上限；ReAct 每轮只在末尾追加，💭 前缀高度重合，必须开 Prefix Caching（第 15 章 Q8）；相互独立的子查询并行执行；简单 query 仍走普通 RAG（路由）。
 
-    def retrieve(self, query, k=5):
-        hits = self.vs.search(embed(query), k=k*3)   # 小块检索：★精确★
-        parent_ids = dedup([h.meta["parent"] for h in hits])[:k]
-        return [self.parents[i] for i in parent_ids]  # 返回大块：★完整★
+**Q：怎么决定上不上这些高级方案？**
 
-# ---- ③ Contextual Retrieval ----
-CTX_PROMPT = """<document>{whole_doc}</document>
-这是上面这份文档中的一个片段：
-<chunk>{chunk}</chunk>
-请用一两句话说明这个片段在整份文档中的位置和讨论的内容，只输出这段说明。"""
+A：先建评测集并测基线；**按 query 类型分组看失败案例**（💭 总体 80% 可能是"事实类 95% + 全局类 10%"）；只对失败的那类 query 引入专用方案并通过路由分发；最后核算延迟和成本。
 
-def contextualize(whole_doc, chunk):
-    # ★whole_doc 是固定前缀 → Prefix Caching 命中率 ~100% → 极便宜★（第 12 章 Q7）
-    ctx = llm(CTX_PROMPT.format(whole_doc=whole_doc, chunk=chunk))
-    return ctx + "\n\n" + chunk    # ← prepend 后再 embedding
-```
-
-> **两个手撕时的细节**：
-> 1. **`length_function` 要按 token 算，不是字符** —— 中文一个字约 1-1.5 token，英文一个词约 1.3 token。按字符切会让 chunk 的实际 token 数飘忽不定。
-> 2. **中文的 separator 要加 `"。"`** —— LangChain 的默认 separator 是英文的，**对中文直接失效**（它会一路降级到按字符切）。**这是个真实的、极其常见的坑。**
-
-### 🔥 高频追问 Top 3
-
-**Q：overlap 到底有没有用？多少合适？**
-
-A：**有用，但它是"补丁"不是"方案"——而且它有隐藏成本。**
-
-**overlap 解决什么**：防止**恰好切在关键句中间**。
-```
-无 overlap:
-  chunk1: "...我们分析了三个方案。综合考虑成本和风险，"
-  chunk2: "我们最终选择了方案 B。"
-  → 问 "选了哪个方案？" → ★检索到 chunk1 的话，答案不在里面★
-
-有 20% overlap:
-  chunk1: "...我们分析了三个方案。综合考虑成本和风险，我们最终选择了方案 B。"
-  → ★完整★ ✅
-```
-
-**成本（很多人忽略）**：
-1. **存储 +20%**（向量数量 +20%）
-2. **检索时会返回重复内容** → **占用宝贵的 context** → **要去重**
-3. **rerank 时同一段内容出现多次** → 挤占 top-k 名额
-
-**经验值**：**10-20%**（512 的 chunk 用 50-100 的 overlap）
-
-**但更重要的一句**：
-> **"如果你的 chunking 是<u>结构感知</u>的（按段落/标题/条款切），overlap 的必要性就大大降低了 —— 因为你切在了<u>天然的边界</u>上，本来就不会切断语义。**
->
-> **overlap 是给<u>无脑固定长度切分</u>打的补丁。"**
-
-**这个判断能体现你理解了 overlap 的本质。**
-
-**Q：怎么处理表格、图片、代码这些非纯文本？**
-
-A：**这是 RAG 落地时最脏、最耗时、也最容易被面试问到的部分——因为它是真实的痛点。**
-
-**表格**（最难）：
-```
-❌ 反模式：PDF 表格被解析成一行行乱码
-  "营收 | 2022 | 2023\n产品A | 100 | 130\n..."  →  ★丢失了行列关系★
-  
-✅ 方案 1：整张表作为一个 chunk，★保留 markdown 表格格式★（LLM 能读懂 markdown 表）
-✅ 方案 2：★用 LLM 把表格转成自然语言描述★，两个都存
-   "2023 年产品 A 的营收是 130 万，相比 2022 年的 100 万增长了 30%。"
-   → ★这个描述的 embedding 比表格本身好得多★（因为 query 是自然语言！）
-✅ 方案 3：结构化的表 → ★存进数据库，走 Text2SQL 路由★（Q6）
-   → 因为"2023 年营收总和是多少"这种问题，★向量检索根本回答不了★
-```
-
-**图片**：
-- **多模态 embedding**（CLIP 系）：可以直接检索图
-- **更实用**：**用 VLM 生成图片描述**，**索引描述、返回图片** —— 又是 Small-to-Big 的变体！
-
-**代码**：
-- ❌ **不要用文本 splitter** —— 会把函数切两半
-- ✅ **用 AST 按函数/类切**（`RecursiveCharacterTextSplitter.from_language(Language.PYTHON)`）
-- ✅ **把 import、类名、文件路径 prepend 到每个 chunk** —— 穷人版 Contextual Retrieval
-
-**通用原则（这句是答题的落点）**：
-$$\boxed{\text{"索引一个为检索优化的表示，返回一个为阅读优化的表示"}}$$
-
-—— 表格索引"自然语言描述"、返回"markdown 表"；图片索引"描述"、返回"图片"；代码索引"函数签名 + docstring"、返回"完整函数"。
-
-**这就是 Small-to-Big 思想的<u>推广</u>：检索用的东西和给 LLM 的东西，<u>不必是同一个</u>。**
-
-**Q：Late Chunking 和 Contextual Retrieval 该选哪个？**
-
-A：**看你的语料价值和 embedding 模型。**
-
-| | **Contextual Retrieval** | **Late Chunking** |
-|---|---|---|
-| 怎么加上下文 | **LLM 显式生成一段说明** | **靠 attention 隐式注入** |
-| 额外成本 | ✅ LLM 调用（**靠 Prefix Caching 压到很低**） | ✅ **零**（只是改了 pooling 的时机） |
-| 需要什么 | 一个便宜的 LLM | ⚠️ **长上下文的 embedding 模型**（8K+） |
-| 文档长度限制 | ✅ **无限**（可以分段喂给 LLM） | ❌ **受 embedding 模型的窗口限制** |
-| 效果 | **失败率 -35%**（有实测数据） | 相当，**在长文档上更好** |
-| 可解释 | ✅ **能看到加了什么** | ❌ 黑盒 |
-| BM25 也受益 | ✅（**contextual BM25**，加的文字也进倒排索引） | ❌ **只有 dense 受益** |
-
-**关键差异（这条最实用）**：**Contextual Retrieval 的上下文是<u>文字</u>，所以 BM25 也能吃到**！Anthropic 的 49% 就是这么来的（35% 是纯 embedding，加上 contextual BM25 才到 49%）。**Late Chunking 只改 dense 向量，BM25 一点好处都没有。**
-
-**实践建议**：
-- **文档 < 8K + 有好的长上下文 embedding 模型** → **Late Chunking**（免费）
-- **文档很长 / 语料价值高 / 已经在用混合检索** → **Contextual Retrieval**（能带上 BM25）
-- **两个可以叠加** —— 先 contextualize，再 late chunk
-
-**但最重要的还是那句**：
-> **"在上这些之前，先确保你的<u>结构感知分块</u>做对了。把 markdown 标题层级 prepend 到 chunk 前面，是<u>免费版</u>的 Contextual Retrieval，能拿到大部分收益。"**
-
-### ⚠️ 常见陷阱
-
-1. **说不清"embedding 被稀释"** —— 这是"chunk 不能太大"的**根本原因**，不是"噪声多"这么浅。
-2. **纠结于"最优 chunk size"** —— **真正的高手是跳出二选一**（Small-to-Big / Contextual / Late Chunking）。
-3. **中文用英文的 separator** —— LangChain 默认没有 `"。"`，**会一路降级到按字符切**。真实的坑。
-4. **`length_function` 按字符** —— 要**按 token**。
-5. **无脑切有结构的文档** —— **结构感知是性价比最高的一招**。
-6. **忽略表格** —— 表格是 RAG 落地最大的脏活，且**很多问题根本该走 Text2SQL 而不是向量检索**。
-
-### 📚 延伸阅读
-- [Introducing Contextual Retrieval](https://www.anthropic.com/news/contextual-retrieval) - **Anthropic，35%/49%/67% 的数据出处，必读**
-- [Late Chunking](https://arxiv.org/abs/2409.04701) - Jina AI
-- [Dense X Retrieval: What Retrieval Granularity Should We Use?](https://arxiv.org/abs/2312.06648) - 命题分块
+### 📚 出处
+- Edge et al. *From Local to Global: A Graph RAG Approach to Query-Focused Summarization*. 2024. arXiv:2404.16130
+- Yan et al. *Corrective Retrieval Augmented Generation*. 2024. arXiv:2401.15884
+- Asai et al. *Self-RAG: Learning to Retrieve, Generate, and Critique through Self-Reflection*. ICLR 2024. arXiv:2310.11511
+- Singh et al. *Agentic Retrieval-Augmented Generation: A Survey on Agentic RAG*. 2025. arXiv:2501.09136
 
 ---
 
-## Q3：Embedding 选型与 ANN 索引 ⭐⭐⭐⭐⭐（必问）
+## Q8：幻觉归因与 RAGAS 评估 ⭐⭐⭐⭐⭐
 
 ### 🎯 一句话标答
 
-> Embedding 是 **bi-encoder**——query 和 doc **分别**编码，**doc 可以离线预算**，所以快，但**两者从不交互**（这是它精度受限的根源，也是 Rerank 存在的理由）；选型的关键是 **① 必须用"非对称检索"训练的模型**（RAG 是"问题 → 段落"，不是"句子 → 句子"）、**② 很多模型要求加 instruction prefix**（忘了会掉好几个点，是真实的坑）、**③ MTEB 榜单会 overfit，必须在你的领域数据上测**；索引方面，**HNSW**（多层图，像跳表）是百万级的默认，**`ef_search` 是召回率 ↔ 延迟的旋钮**，亿级要上 **IVF-PQ / DiskANN**。
+> RAG 的错误要先**归因**：**检索失败**（上下文里根本没有答案）还是**生成失败**（有答案但没用、用错或编造）。📄 **RAGAS**（Es et al. 2024）的四个指标正好对应这个二分：**Faithfulness、Answer Relevancy** 衡量生成，**Context Precision、Context Recall** 衡量检索。实践原则：**先测检索**（Recall@k 不需要 LLM、便宜、指向明确），召回足够高后再看生成。
 
-### 🗣️ 30 秒口语版
+### 📐 四个指标
 
-"这题分两半：**embedding 模型**和**向量索引**。
-
-**第一半：Embedding = Bi-encoder**
-
-$$\text{sim}(q, d) = \cos\big(\text{Enc}(q),\ \text{Enc}(d)\big)$$
-
-**关键性质**：$q$ 和 $d$ **分别**编码 → **$d$ 的向量可以<u>离线</u>预计算好** → 检索时**只需要算 query 的向量**，然后查索引 → **快**。
-
-**代价（这是本题最重要的洞察）**：**$q$ 和 $d$ 从来没有<u>交互</u>过**。
-
-```
-doc 被压成一个向量的时候，★它根本不知道 query 会问什么★
-→ 它只能压一个"通用的、平均的"表示
-→ ★这是个信息瓶颈★
-```
-
-**这就是 Rerank（Q5）存在的全部理由** —— cross-encoder 让 $q$ 和 $d$ 的每个 token 互相 attend。
-
-**第二半：选型的三个关键（都是实战坑）**
-
-**① 必须是"非对称检索"的模型** ⭐
-- **对称**：query 和 doc 是**同类型**（"句子相似度"、"找重复问题"）
-- **非对称**：**query 是<u>问题</u>，doc 是<u>陈述性段落</u>** ← **RAG 是这种！**
-- **这两个的训练目标完全不同**，用错模型会掉很多点
-
-**② 别忘了 instruction prefix** ⭐（**最常见的坑**）
-BGE 系列要求 query 侧加前缀：
-```python
-query = "为这个句子生成表示以用于检索相关文章：" + user_query   # ★BGE 中文★
-doc   = raw_doc                                                # ★doc 侧不加！★
-```
-- ⚠️ **忘了加 → 掉 3-5 个点**
-- ⚠️ **doc 侧也加了 → 也掉点**（它是非对称的！只有 query 加）
-- **E5 系列**用 `"query: "` / `"passage: "`，**两侧都要加但内容不同**
-- **每个模型的规矩不一样，必须看 model card**
-
-**③ MTEB 榜单会 overfit** ⭐
-- **榜单第一名在你的领域可能不如第五名**
-- 很多模型是**冲着 MTEB 训的**
-- **必须在你自己的评测集上测 Recall@k** —— 这是唯一可靠的判据
-
-**主流选择**：
-| 场景 | 模型 |
-|---|---|
-| **中文** | **BGE**（智源）、GTE（阿里）、Conan |
-| **多语言 / 想要三合一** | **BGE-M3**（**同时输出 dense + sparse + ColBERT！**） |
-| 英文开源 | E5, GTE, Nomic |
-| 商用 | OpenAI text-embedding-3, Cohere v3, **Voyage** |
-
-**第三半：ANN 索引**
-
-**为什么要 ANN**：精确检索要**暴力算全部**：
-```
-100 万个 1024 维向量 = 4 GB
-一次 query = ★约 10 亿次乘加★（100 万 × 1024）→ 几百毫秒 ❌
-```
-
-**HNSW（百万级的默认）**——**多层图，像跳表**：
-```
-Layer 2 (稀疏, ★长边★):    A ─────────────→ F
-                          ↓
-Layer 1 (中等):           A ──→ C ──→ E ──→ F
-                          ↓
-Layer 0 (稠密, 全部点):   A→B→C→D→E→F→G→H...
-
-搜索：从顶层入口开始【贪心走向离 query 更近的邻居】
-     走到局部最优 → ★下降一层★ → 继续贪心
-     → 用长边【快速接近】，用短边【精细定位】
-```
-
-**三个参数（必须知道）**：
-| 参数 | 含义 | 典型 | 影响 |
+| 指标 | 测什么 | 需要标准答案 | 做法 |
 |---|---|---|---|
-| **M** | 每个节点的邻居数 | 16-64 | ↑ 召回↑ **内存↑** |
-| **ef_construction** | **建索引**时的候选池 | 200 | ↑ 索引质量↑ **建索引慢↑** |
-| **★ef_search★** | **搜索**时的候选池 | 50-200 | ⭐ **召回率 ↔ 延迟的旋钮** |
+| **Faithfulness** | 答案是否有上下文依据 | 否 | 把答案拆成原子陈述，逐条判断能否由上下文推出，取比例 |
+| Answer Relevancy | 答案是否切题 | 否 | 由答案反推若干问题，与原问题算 embedding 相似度 |
+| Context Precision | 相关内容是否排在前面 | 是 | 加权的 precision@k |
+| **Context Recall** | 该检索的是否都检索到 | 是 | 标准答案中的陈述有多少能由上下文支持 |
 
-$$\boxed{\text{ef\_search 是运行时可调的——召回不够就调大，延迟太高就调小}}$$
+💭 Faithfulness 和 Answer Relevancy 不需要标准答案，可以对线上**采样流量**持续运行，做幻觉率监控。
 
-**HNSW 的代价**：
-- ❌ **内存大**（图结构本身要存！M=32 时，图的内存约等于向量本身的一半）
-- ❌ **删除麻烦**（图会退化，要定期重建）
-- ❌ **建索引慢**
-
-**其他索引**：
-| 索引 | 内存 | 召回 | 适用 |
-|---|---|---|---|
-| **暴力（Flat）** | 小 | **100%** | **< 10 万，别过度设计！** |
-| **HNSW** | **大** | **高** | **10 万 - 1000 万** ⭐ |
-| IVF | 中 | 中 | 大规模 |
-| **IVF-PQ** | **极小** | 低 | 亿级 |
-| **DiskANN** | 小（图在 SSD） | 高 | **十亿级** |
-
-**最后一句**：
-> **"< 10 万条就别搞 ANN 了，暴力搜索几毫秒，召回率 100%，还省一个组件。**
-> **数据量不大的话，pgvector 直接用 Postgres —— 少维护一个向量库，这个收益比那点性能大得多。"**"
-
-### 📐 HNSW 的搜索过程
+### 📐 Faithfulness 的实现细节
 
 ```python
-def hnsw_search(query, ef_search=100, k=10):
-    ep = entry_point                      # 顶层入口
-    
-    # ---- ① 从顶层往下，每层贪心走到局部最优 ----
-    for layer in range(top_layer, 0, -1):
-        ep = greedy_search(query, ep, layer, ef=1)   # ← ★ef=1：只找最近的一个★
-        # 上层的边【长】→ 每一步跨很远 → ★快速逼近目标区域★
-    
-    # ---- ② 在最底层（Layer 0）做宽度搜索 ----
-    candidates = greedy_search(query, ep, layer=0, ef=ef_search)  # ← ★ef_search 个候选★
-    return top_k(candidates, k)
-```
-
-**为什么分层有效——和跳表是同一个思想**：
-$$\boxed{\text{上层的长边负责"快速接近"（$O(\log N)$ 跳），下层的短边负责"精细定位"}}$$
-
-**没有分层的话**（纯 NSW），从一个随机点走到目标要走很多步——因为每步只能走到邻居，而邻居都很近。**分层让你能"坐飞机"到目标区域附近，再"走路"。**
-
-**ef_search 的物理含义**：
-```
-ef_search = 1   → ★纯贪心★，一条路走到黑 → 容易陷入局部最优 → 召回低 ❌
-ef_search = 100 → 维护一个 100 大小的候选池，★同时探索多条路径★ → 召回高 ✅
-ef_search = 1000→ 几乎接近暴力 → 召回 ~100%，但慢
-```
-
-**实践**：**从 100 起调，测 Recall@10。够了就往下调省延迟，不够就往上加。**
-
-### 🔍 对称 vs 非对称检索
-
-| | **对称检索** | **非对称检索** ⭐ |
-|---|---|---|
-| 场景 | 句子相似度、**找重复问题**、去重 | **问题 → 文档段落** |
-| 两侧 | **同类型** | **异类型**（疑问句 vs 陈述段落） |
-| **RAG** | ❌ | ✅ **这个！** |
-| 模型 | sentence-transformers 的通用模型 | **BGE / E5 / GTE 的 retrieval 版** |
-| instruction | 通常不用 | ⭐ **query 侧要加前缀** |
-
-**为什么要区分**：
-```
-query: "苹果公司的 CEO 是谁？"        ← 疑问句，短
-doc:   "蒂姆·库克自 2011 年起担任
-        苹果公司首席执行官..."        ← 陈述段落，长
-
-★这两个的表面形式完全不同★
-→ 用"句子相似度"模型算，相似度不高
-→ 必须用【专门训练"问题应该和它的答案段落接近"】的模型
-```
-
-> 💡 **这个"query 和 doc 天然不同构"的问题，正是 <u>HyDE</u>（Q6）要解决的** —— HyDE 的做法是**让 LLM 先假想一个答案（陈述句）**，用**它**去检索，从而把"非对称检索"变成"**对称检索**"。**这个连接很重要。**
-
-### 🔥 高频追问 Top 3
-
-**Q：embedding 的维度怎么选？1024 vs 768 vs 3072？**
-
-A：**不是越大越好，且现在有"一个模型出多个维度"的方案。**
-
-**维度的成本（要能算）**：
-```
-1000 万个向量：
-  768 维  × 4 字节 = ★30 GB★
-  1024 维 × 4 字节 = ★41 GB★
-  3072 维 × 4 字节 = ★123 GB★  ← ★装不下了！★
-  
-  ★再加上 HNSW 的图★（🧮 底层每节点约 2M 个 4 字节邻居 id：M=16 → ~128 B/向量，
-   相对 3072 维 fp32 的 12 KB 只占 ~1%；向量维度越低，图的占比越高）
-  → 3072 维 + HNSW ≈ 125 GB → ★单机内存已很吃紧，通常要分片或量化（PQ/int8）★
-```
-
-**收益递减**（💭 经验观察，可在 MTEB 排行榜上按同系列模型的不同维度对照）：768 → 1024 通常只提升 1-2 个点，1024 → 3072 提升更小。**但成本是线性涨的。**
-
-**★Matryoshka Representation Learning (MRL)★ —— 优雅的解法**：
-> **训练时让向量的<u>前 k 维</u>就是一个完整可用的表示** —— 像俄罗斯套娃，**层层嵌套**。
-
-```
-一个 3072 维的 MRL 向量：
-  取前 256 维  → 是个能用的 256 维 embedding（略差）
-  取前 768 维  → 是个能用的 768 维 embedding
-  取前 1536 维 → 更好
-  全部 3072 维 → 最好
-
-→ ★一个模型，按需截断！★
-```
-
-**OpenAI 的 text-embedding-3 就支持** —— 你可以只取前 256 维存起来。
-
-**MRL 的杀手级用法：两阶段检索**
-```
-① 用 ★256 维★ 粗筛 top-1000   → ★内存只要 1/12，快 12 倍★
-② 用 ★3072 维★ 精排这 1000 个 → ★精度不损失★
-```
-$$\boxed{\text{这和 "bi-encoder 召回 + cross-encoder 精排" 是同一个思想：粗筛用便宜的，精排用贵的}}$$
-
-**能说出 MRL + 两阶段检索，是这题的加分点** —— 它体现了"**分级处理**"这个贯穿全书的思想。
-
-**Q：为什么向量检索对"精确匹配"很差？**
-
-A：**因为 embedding 的本质是<u>压缩</u>，而压缩必然丢失"罕见但精确"的信息。**
-
-**三类典型失败**：
-
-| 类型 | 例子 | 为什么失败 |
-|---|---|---|
-| **型号 / ID** | "XR-2000P" vs "XR-2000S" | **只差一个字符，但 embedding 几乎相同**（tokenizer 会切成 `XR`/`-`/`2000`/`P`，前三个完全一样） |
-| **人名 / 罕见词** | "张三丰" | **训练数据里没见过 → embedding 是随机的垃圾** |
-| **错误码** | "E4032" | 同上，且**数字的 embedding 极不可靠** |
-| **★否定★** | "不含糖" vs "含糖" | ⚠️ **embedding 极其接近！**（"不"这一个字的信息量被稀释了） |
-| **★数字比较★** | "超过 100 万" vs "低于 100 万" | 同上 |
-
-**根本原因**：
-$$\boxed{\text{embedding 编码的是"语义"，而"XR-2000P vs XR-2000S" 的区别不是语义的，是符号的}}$$
-
-**语义相似 ≠ 是我要的那一个。** 型号 P 和型号 S **语义上就是极其相似**（都是 XR-2000 系列的变体）—— embedding 做的**完全正确**，只是**这个任务不需要语义相似，需要精确匹配**。
-
-**否定那一行最有意思**：**"不含糖"和"含糖"在 embedding 空间里非常近**，因为它们**讨论的是同一个话题**！embedding 捕捉的是"**关于什么**"，不是"**是还是不是**"。
-
-**解法**：
-1. ⭐ **BM25**（Q4）—— **精确的词匹配**，"XR-2000P" 和 "XR-2000S" 是**不同的 token**，一目了然
-2. **元数据过滤** —— 型号、日期、部门做成结构化字段，**先过滤再检索**
-3. **混合检索**（Q4）—— **这就是为什么 BM25 到今天还没死**
-
-$$\boxed{\text{"BM25 没有被 embedding 取代，因为它们捕捉的是不同维度的信息"}}$$
-
-**Q：向量库怎么选？Milvus / Qdrant / pgvector / Faiss？**
-
-A：**按"数据量 + 你已有的技术栈"选，不要过度设计。**
-
-| | 是什么 | 适合 |
-|---|---|---|
-| **Faiss** | **一个库**（不是服务！没有持久化、没有 CRUD、没有过滤） | **原型 / 嵌入到自己的服务里** |
-| **★pgvector★** | Postgres 插件 | ⭐ **< 500 万 + 已经在用 PG**。**强烈推荐** |
-| **Qdrant** | Rust 写的向量库 | **过滤功能强**、性能好、易部署 |
-| **Milvus** | 分布式向量库 | **亿级**、要分布式 |
-| **Weaviate** | 带 GraphQL、内置模块 | 想要开箱即用 |
-| **Elasticsearch** | 老牌搜索 + 向量 | ⭐ **已经在用 ES → 直接加向量字段，还自带 BM25！** |
-
-**选型的真实建议（这才是重点）**：
-> **"< 500 万条，用 pgvector。**
-> **理由：少维护一个组件，事务、备份、权限、监控全都是现成的，还能直接和业务表 <u>JOIN</u>（元数据过滤 = SQL WHERE，比向量库的过滤语法好用一万倍）。**
-> **那点性能差异，远不如"少一个要运维的分布式系统"值钱。"**
-
-> 💡 **同样的道理**：**如果你已经在用 Elasticsearch，那直接在 ES 里加 dense_vector 字段** —— **BM25 和向量在同一个系统里，混合检索（Q4）都不用跨服务**！这是个被严重低估的方案。
-
-**什么时候真的需要专业向量库**：
-- **> 1000 万条**
-- 要**分布式 / 高可用**
-- 要**高 QPS**（> 1000）
-- 要**复杂的过滤 + 向量混合查询**
-
-**"不要为了 500 万条数据引入一个分布式向量库"** —— 这个判断比任何 benchmark 都值钱。
-
-### ⚠️ 常见陷阱
-
-1. **忘了 instruction prefix** —— **掉 3-5 个点**，且**只在 query 侧加**。最常见的坑。
-2. **用对称模型做非对称检索** —— RAG 是"问题 → 段落"。
-3. **信 MTEB 榜单** —— **会 overfit**，必须在你的数据上测。
-4. **10 万条数据就上 HNSW + Milvus** —— **暴力搜索几毫秒，pgvector 够用**。过度设计。
-5. **不知道 `ef_search` 是运行时旋钮** —— 召回不够第一个该调的就是它。
-6. **指望向量检索做精确匹配** —— **"不含糖"和"含糖"的 embedding 极其接近**。
-
-### 📚 延伸阅读
-- [HNSW 原论文](https://arxiv.org/abs/1603.09320) - Malkov & Yashunin
-- [BGE-M3](https://arxiv.org/abs/2402.03216) - **dense + sparse + ColBERT 三合一**
-- [Matryoshka Representation Learning](https://arxiv.org/abs/2205.13147) - **按需截断维度**
-- [MTEB](https://huggingface.co/spaces/mteb/leaderboard) - 榜单（但**别只看榜单**）
-
----
-
-## Q4：混合检索与 RRF ⭐⭐⭐⭐⭐（必问）
-
-### 🎯 一句话标答
-
-> 向量检索和 BM25 捕捉的是**不同维度**的信息——向量抓"**语义**"（"怎么退货" ↔ "退换货流程"），BM25 抓"**精确的符号**"（型号、错误码、人名、否定词），**两者互补而非替代**；融合时的关键洞察是 **"不同检索器的<u>分数根本不可比</u>"**（余弦在 [0,1]，BM25 是无界正数，分布完全不同，归一化又极易被离群值破坏），所以 **RRF 只用 <u>rank</u> 不用 score**：$\text{RRF}(d) = \sum_r \frac{1}{k + \text{rank}_r(d)}$——**rank 是无量纲的，天然可比**。这是"**相对优于绝对**"这条主线在本教材的**第四次**登场。
-
-### 🗣️ 30 秒口语版
-
-"这题的核心是两个洞察：**为什么要混合**，和 **为什么 RRF 用 rank 不用 score**。
-
-**第一个洞察：向量和 BM25 抓的是不同维度的东西。**
-
-| | **向量检索** | **BM25** |
-|---|---|---|
-| **"怎么退货"↔"退换货流程"** | ✅ **语义匹配** | ❌ 一个词都不重合 |
-| **"XR-2000P" vs "XR-2000S"** | ❌ **embedding 几乎一样** | ✅ **不同的 token，一目了然** |
-| **人名 "张三丰"** | ❌ 训练时没见过 → **垃圾向量** | ✅ **精确匹配** |
-| **错误码 "E4032"** | ❌ | ✅ |
-| **"不含糖" vs "含糖"** | ❌ **极其接近！** | ✅ **"不"是个 token** |
-| **同义词、跨语言** | ✅ | ❌ |
-| **拼写错误** | ✅ **有一定容错** | ❌ |
-
-$$\boxed{\text{BM25 没有被 embedding 取代，因为它们捕捉的是正交的信息}}$$
-
-📄 **Anthropic 的报告**（top-20 检索失败率，基线 5.7%）：contextual embedding 单独用降 **35%**（→3.7%），**加上 contextual BM25 降 49%**（→2.9%）—— BM25 多贡献了 14 个百分点的**相对**降幅。💭 注意这是 Anthropic 在自选数据集上的博客结果，非同行评审，迁移到你的语料需重测。
-
-**第二个洞察：融合时为什么用 rank 不用 score？——这是本题的题眼。**
-
-**朴素想法**：把两个分数加权相加。
-```python
-score = 0.7 * cosine_score + 0.3 * bm25_score    # ← ★这是错的★
-```
-
-**为什么错**：
-- **余弦相似度**：**有界** [0, 1]（实践中通常挤在 0.6-0.9 这个窄带里）
-- **BM25**：**无界**的正数，可以是 0，也可以是 47.3，**取决于文档长度和词频**
-- **两者的分布形状完全不同**
-
-**"0.85 的余弦" 和 "12.3 的 BM25" 谁更好？—— 这个问题<u>没有意义</u>。**
-
-**那归一化呢？** min-max 归一化**极其脆弱**：
-```
-本批结果的 BM25: [47.3, 3.1, 2.9, 2.8, 2.7]
-                  ↑ ★一个离群值★
-min-max 后:      [1.0, 0.009, 0.004, 0.002, 0.0]
-                        ↑ ★后面 4 个全被压成 0，区分度没了★
-```
-
-**RRF 的解法：<u>丢掉分数，只用排名</u>。**
-
-$$\text{RRF}(d) = \sum_{r \in \text{rankers}} \frac{1}{k + \text{rank}_r(d)}, \qquad k = 60$$
-
-**精髓**：
-$$\boxed{\text{rank 是无量纲的 —— "第 1 名"在任何检索器里都是"第 1 名"，天然可比}}$$
-
-**它丢掉了"好多少"的信息，但保住了"谁更好"的信息** —— 而后者才是我们需要的，且**鲁棒得多**。
-
-**k=60 的作用**：**平滑**。
-- $\frac{1}{60+1} = 0.0164$，$\frac{1}{60+2} = 0.0161$ —— **第 1 名和第 2 名只差 2%**
-- 如果 $k=0$：$\frac{1}{1}=1$ vs $\frac{1}{2}=0.5$ —— **第 1 名是第 2 名的 2 倍**！
-
-$$\begin{aligned}
-k \text{ 大} &\Rightarrow \text{各 rank 的差距被压平} \Rightarrow \textbf{更看重"被多个检索器都召回"} \\
-k \text{ 小} &\Rightarrow \text{头部权重大} \Rightarrow \textbf{更看重"某一个检索器的 top-1"}
-\end{aligned}$$
-
-**$k=60$ 是原论文的经验值，意味着"共识 > 单个检索器的自信"** —— 一个在两个检索器里都排第 5 的文档，会**打败**只在一个检索器里排第 1 的文档。**这正是我们想要的：互相印证。**
-
-**这条主线（相对 > 绝对）在本教材的第四次登场**：
-1. **PPO 的 Advantage**（相对基线，不是绝对 reward）
-2. **RLHF 的 reward shaping**
-3. **第 14 章的 min-p**（相对最高概率，不是绝对阈值）
-4. **本题的 RRF**（相对排名，不是绝对分数）
-
-**为什么这条主线反复出现？** 因为**绝对量的<u>量纲</u>是脆弱的、场景相关的、会被离群值破坏的；而相对量是<u>无量纲</u>的、鲁棒的。**"
-
-### 📐 BM25 的公式
-
-$$\text{BM25}(q, d) = \sum_{i} \text{IDF}(q_i) \cdot \frac{f(q_i, d)\cdot(k_1+1)}{f(q_i, d) + k_1\cdot\left(1 - b + b\cdot\frac{|d|}{\text{avgdl}}\right)}$$
-
-| 部件 | 作用 |
-|---|---|
-| $\text{IDF}(q_i)$ | **罕见词权重高**（"的"没信息量，"XR-2000P"信息量爆炸） |
-| $f(q_i,d)$ | 词频 |
-| **$k_1$**（1.2-2.0） | ⭐ **词频饱和** |
-| **$b$**（0.75） | **文档长度归一化** |
-
-**$k_1$ 的作用——词频饱和（这是 BM25 相对 TF-IDF 的核心改进）**：
-```
-一个词出现 1 次  → 有用 ✅
-出现 10 次       → 更有用，但★不是 10 倍★
-出现 100 次      → ★几乎不比 10 次更有用★（可能是关键词堆砌！）
-```
-$$\lim_{f\to\infty} \frac{f(k_1+1)}{f+k_1(\cdot)} = k_1 + 1 \quad \text{← ★有上界，饱和了★}$$
-
-**TF-IDF 是线性的**（出现 100 次就是 100 倍权重）→ **容易被关键词堆砌攻击**。BM25 的饱和是**对现实的正确建模**。
-
-**$b$ 的作用——长度归一化**：长文档**天然**包含更多词 → 不归一化的话，**长文档会不公平地占优**。$b=0.75$ 是"部分归一化"的经验值。
-
-> **注意 $k_1$ 的"饱和"和第 13 章 AWQ 的"稀释"、第 12 章的"摊薄"是同一类思想** —— **对"边际收益递减"的正确建模**。
-
-### 💻 RRF 实现
-
-```python
-def reciprocal_rank_fusion(rankings: list[list[str]], k=60, weights=None):
-    """
-    rankings: 每个检索器返回的【有序】doc_id 列表
-              例：[["d3","d1","d7"], ["d1","d9","d3"]]
-    ★注意：只用 rank，完全不碰 score★
-    """
-    weights = weights or [1.0] * len(rankings)
-    scores = defaultdict(float)
-
-    for ranking, w in zip(rankings, weights):
-        for rank, doc_id in enumerate(ranking, start=1):   # ← ★rank 从 1 开始★
-            scores[doc_id] += w / (k + rank)               # ← ★全部的数学在这一行★
-
-    return sorted(scores.items(), key=lambda x: -x[1])
-
-# ---- 使用 ----
-dense_hits  = vector_search(query, k=50)      # ["d3", "d1", "d7", ...]
-sparse_hits = bm25_search(query, k=50)        # ["d1", "d9", "d3", ...]
-
-fused = reciprocal_rank_fusion([dense_hits, sparse_hits])
-# → 送给 rerank（Q5）
-```
-
-**手撕时的三个细节**：
-1. **rank 从 1 开始**（从 0 开始的话，第一名是 $\frac{1}{60+0}$，和第二名 $\frac{1}{61}$ 差别很小，但边界不干净）
-2. **没被某个检索器召回的 doc，就是不加那一项**（不是加 0，是**根本不参与那个 ranker 的求和**）—— 所以**被两个都召回的文档天然有优势**，这正是"共识"的体现
-3. **可以加权重**，但**慎用** —— RRF 的美就在于它不需要调参
-
-### 🔍 三种融合方式对比
-
-| | **加权分数融合** | **★RRF★** | **Rerank（Q5）** |
-|---|---|---|---|
-| 用什么 | **score**（要归一化） | **rank** ✅ | **重新用模型算** |
-| 鲁棒性 | ❌ **脆弱**（离群值、分布差异） | ✅ **极稳** | ✅ |
-| 需要调参 | ❌ 权重难调 | ✅ **k=60 直接用** | — |
-| 成本 | 零 | **零** ✅ | ❌ **N 次前向** |
-| 效果 | 中 | 好 | **最好** |
-| 何时用 | 分数分布已知且稳定 | ⭐ **默认** | ⭐ **在 RRF 之后** |
-
-**标准流水线（要能背）**：
-```
-query
-  ├──→ 向量检索 top-50  ──┐
-  ├──→ BM25 检索 top-50  ──┼──→ ★RRF 融合★ → top-20 ──→ ★Rerank★ → top-5 → LLM
-  └──→ (可选) 其他检索器 ──┘
-       ↑ 宽召回，宁滥勿缺      ↑ 便宜的粗排        ↑ 贵的精排
-```
-
-$$\boxed{\text{"宽召回 → 便宜的粗排 → 贵的精排" —— 这是所有检索系统的通用架构}}$$
-
-（搜广推是这样，Q3 的 MRL 两阶段检索是这样，第 14 章的"投机解码 + 验证"某种意义上也是这样——**用便宜的过一遍，用贵的把关**。）
-
-### 🔥 高频追问 Top 3
-
-**Q：BGE-M3 的"三合一"是怎么回事？它取代混合检索了吗？**
-
-A：**没取代，但让混合检索的<u>工程</u>简单多了——这是个很好的前沿点。**
-
-**BGE-M3 用<u>一个模型</u>同时输出三种表示**：
-1. **Dense**：`[CLS]` 的向量 → 常规向量检索
-2. **Sparse (Lexical)**：**每个 token 的权重** → **可以当"学出来的 BM25"用**！
-3. **Multi-Vector (ColBERT)**：token 级向量 → late interaction（Q5）
-
-**关键优势**：
-- **一次前向，三种表示** → **计算成本几乎不变**
-- **三者可以内部融合**（论文给了融合权重）
-- **Sparse 是"学出来的"，比 BM25 强**：它能给**同义词**分配权重（BM25 只认字面完全一样的词）
-
-**但它没有取代混合检索**：
-- ❌ **Sparse 仍然基于<u>模型的词表</u>** —— 词表外的、罕见的型号（"XR-2000P" 可能被切成 4 个 subword）**仍然不如真正的 BM25**
-- ❌ **BM25 是"零成本、零训练、无需 GPU"** 的，而 M3 的 sparse 要过模型
-- ❌ **BM25 有几十年的工程积累**（ES 的倒排索引、短语查询、字段权重…）
-
-**正确的定位**：
-> **"BGE-M3 让'混合检索'从'维护两套系统'变成'一个模型的三个输出'——<u>工程上</u>简化了很多。但在<u>精确符号匹配</u>上，真正的 BM25 仍有不可替代性。**
->
-> **实践上：M3 的 dense + sparse 内部融合，<u>再</u>和真 BM25 做 RRF —— 三路融合。"**
-
-**Q：混合检索的两路，top-k 该取多少？**
-
-A：**宽召回 —— 这是原则，且长上下文时代更宽。**
-
-```
-❌ 反模式：向量 top-5 + BM25 top-5 → RRF → top-5
-   → ★两路的 top-5 高度重合 → 融合没意义★
-   → 而且 top-5 太窄，rerank 无米下锅
-
-✅ 正确：向量 top-50 + BM25 top-50 → RRF → top-20 → rerank → top-5
-```
-
-**为什么要宽**：
-$$\boxed{\text{融合和 rerank 只能重排，不能凭空创造。第一阶段漏掉的，后面永远找不回来。}}$$
-
-**这是整个 RAG 最重要的一句话**（也是 Q1 说的"检索是天花板"的具体表达）。
-
-**成本几乎为零**：
-- 向量检索 top-5 和 top-50 的**耗时几乎一样**（HNSW 的开销主要在"走到目标区域"，多返回几个几乎免费）
-- BM25 同理
-
-**代价在 rerank**：top-100 要跑 100 次 cross-encoder 前向。所以：
-$$\text{召回宽} \to \text{RRF 收窄到 20-30} \to \text{rerank 只跑 20-30 次}$$
-
-**RRF 在这里扮演了"廉价粗排"的角色** —— 它把 100 个候选**免费地**收窄到 20 个，让 rerank 的成本可控。
-
-**长上下文时代更宽**（Q1 追问 3）：
-```
-向量 top-100 + BM25 top-100 → RRF → top-50 → rerank → ★top-20★ → LLM（40K context）
-                                                        ↑ 塞得下了，就多塞点
-```
-
-**Q：怎么给不同的检索器分配权重？**
-
-A：**先别分配。这题的正确答案是"通常不需要"。**
-
-**RRF 的美就在于<u>不用调权重</u>** —— $k=60$ 直接用，效果就很好。加了权重反而：
-- **引入一个要调的超参**
-- **在评测集上调好的权重，换个 query 类型就不对了**
-
-**如果一定要加，正确的做法不是"调权重"，而是"<u>路由</u>"**（Q6）：
-
-```python
-# ❌ 反模式：一组固定的全局权重
-weights = [0.7, 0.3]      # 对所有 query 都用这个 → 一定是次优的
-
-# ✅ 正确：★按 query 类型路由★
-if is_exact_lookup(query):        # "错误码 E4032 什么意思"
-    weights = [0.2, 0.8]          # ★BM25 为主★
-elif is_semantic(query):          # "怎么退货"
-    weights = [0.8, 0.2]          # ★向量为主★
-else:
-    weights = [1.0, 1.0]          # 均衡
-```
-
-> 💡 **这正是你笔记里"单一策略是次优的，生产系统按 query 类型路由"那条经验的又一次体现。**
->
-> **"调权重"是在<u>一个全局最优</u>里找折中；"路由"是<u>承认不同 query 需要不同策略</u>。后者才是对的。**
-
-**更进一步（可以提，加分）**：**学一个融合模型** —— 把两路的分数、rank、query 特征作为输入，用 LambdaMART / LightGBM 学一个排序模型。**这就是搜广推的 L2R（Learning to Rank）**。但**对绝大多数 RAG 场景是过度工程** —— RRF + rerank 已经很好了。
-
-### ⚠️ 常见陷阱
-
-1. **加权相加两个分数** —— **量纲不可比，且归一化极易被离群值破坏**。这是这题的核心。
-2. **说不清 k=60 的作用** —— **平滑；k 大 = 更看重"共识"**。
-3. **两路都只取 top-5** —— **融合没意义 + rerank 无米下锅**。**宽召回是原则。**
-4. **以为 BGE-M3 取代了 BM25** —— **精确符号匹配上 BM25 仍不可替代**。
-5. **纠结于调权重** —— **该做的是路由，不是调权重**。
-6. **不知道"融合只能重排，不能创造"** —— 第一阶段漏掉的永远找不回来。
-
-### 📚 延伸阅读
-- [Reciprocal Rank Fusion 原论文](https://plg.uwaterloo.ca/~gvcormac/cormacksigir09-rrf.pdf) - **k=60 的出处，短小精悍**
-- [BM25 的前世今生](https://www.staff.city.ac.uk/~sbrp622/papers/foundations_bm25_review.pdf) - Robertson & Zaragoza
-- [BGE-M3](https://arxiv.org/abs/2402.03216)
-
----
-
-## Q5：Rerank——Bi vs Cross vs ColBERT ⭐⭐⭐⭐⭐（必问）
-
-### 🎯 一句话标答
-
-> **Bi-encoder** 把 doc 压成向量时 **query 还没出现**——它只能压一个"通用的平均表示"，**这是个信息瓶颈**；**Cross-encoder** 把 `[CLS] q [SEP] d [SEP]` 一起过模型，**q 和 d 的每个 token 互相 attend**，精度高得多，但**必须在线算 N 次前向**；**ColBERT** 是中间路线——doc 存 **token 级**向量（不压成一个），用 **MaxSim 的 late interaction**，**精度接近 cross-encoder、速度接近 bi-encoder**，代价是**存储爆炸**；所以标准架构是 **bi-encoder 宽召回（top-100）→ cross-encoder 精排（top-5）**，本质是 **"先压缩后匹配" vs "边看边匹配"** 的分工。
-
-### 🗣️ 30 秒口语版
-
-"这题的核心是一句话：**bi-encoder 在压缩 doc 的时候，还不知道 query 会问什么。**
-
-**Bi-encoder（召回）**
-$$\text{score} = \cos\big(\text{Enc}(q),\ \text{Enc}(d)\big)$$
-- $d$ 的向量**离线预算好** → 检索时只算 query → **快**
-- ❌ **但 $\text{Enc}(d)$ 是在<u>看到 query 之前</u>算的！**
-  - 一个 2000 字的文档要压成 1024 维 —— **压什么、扔什么？**
-  - 它不知道 query 会问"Q2 营收"还是"竞争对手"
-  - → **只能压一个"通用的、平均的"表示** → **信息瓶颈**
-
-**Cross-encoder（精排）**
-$$\text{score} = \text{Model}\big([\text{CLS}]\ q\ [\text{SEP}]\ d\ [\text{SEP}]\big) \to \text{一个标量}$$
-- ✅ **$q$ 和 $d$ 的<u>每个 token</u> 都能互相 attend**
-  - "Q2 营收" 这几个词可以**直接 attend 到**文档里的"第二季度收入"那一句
-  - **模型是在<u>知道 query 的前提下</u>去读文档的** → **有针对性地提取**
-- ❌ **不能预计算**！每个 (q, d) 对都要**跑一次完整前向**
-- ❌ **$O(N)$ 次前向** → **只能用在 top-100 上，不能用在全库上**
-
-$$\boxed{\text{本质区别："先压缩后匹配" vs "边看边匹配"}}$$
-
-**ColBERT（late interaction，中间路线）**
-$$S(q,d) = \sum_{i \in q} \max_{j \in d}\ \big(E_{q_i} \cdot E_{d_j}\big)$$
-
-**读懂这个式子**：
-- doc 存**每个 token 的向量**（**不压成一个**！）—— 所以 **$d$ 侧仍可离线预算** ✅
-- query 的**每个 token**，去找 doc 里**和它最匹配的那个 token**（MaxSim）
-- 把这些 MaxSim **加起来**
-
-**精髓**：
-> **"query 的每个词，在文档里都能找到它的<u>最佳对应</u>吗？"**
->
-> —— **保留了 token 级的交互，但把交互<u>推迟</u>到了检索时（late interaction），而编码仍然是分开的（所以能预算）。**
-
-- ✅ **精度接近 cross-encoder**
-- ✅ **速度接近 bi-encoder**（doc 侧预算）
-- ❌ **存储爆炸**：一个 512 token 的 doc 要存 **512 个向量**！（vs bi-encoder 的 **1 个**）→ **存储 × 512**
-- ColBERTv2 用**残差压缩**把这个降到可接受（~30 倍）
-
-**标准架构**：
-```
-全库 1000 万
-   ↓ ★bi-encoder + BM25 + RRF★（毫秒级，宽召回）
-top-100
-   ↓ ★cross-encoder rerank★（100 次前向，~100ms）
-top-5
-   ↓ LLM
-```
-
-**这就是 "先用便宜的过一遍，再用贵的把关"** —— 和 Q4 的"宽召回→粗排→精排"、Q3 的 MRL 两阶段、搜广推的"召回→粗排→精排"**是同一个架构**。
-
-**Rerank 的收益（Anthropic 的数据）**：
-```
-Contextual Embedding          → 失败率 -35%
-+ Contextual BM25             → -49%
-+ ★Rerank★                    → ★-67%★    ← rerank 又贡献了 18 个点
-```
-**rerank 是 RAG 里性价比最高的组件之一。**
-
-**最后一个免费的技巧（很多人不知道）**：
-> **rerank 之后的<u>摆放顺序</u>也重要！**
-> 因为 **Lost in the Middle**（Q1）—— **把最相关的放<u>开头和结尾</u>，把次要的放中间**。
->
-> ```
-> ❌ [1st][2nd][3rd][4th][5th]        ← 最相关的全在开头，最后几个被浪费
-> ✅ [1st][3rd][5th][4th][2nd]        ← ★最相关的放两头★
-> ```
-> **零成本，几个点的提升。**"
-
-### 🔍 三者对比
-
-| | **Bi-encoder** | **★ColBERT★** | **Cross-encoder** |
-|---|---|---|---|
-| 交互 | ❌ **无**（只有最后的点积） | ⚠️ **Late**（token 级 MaxSim） | ✅ **Full**（每层 attention） |
-| doc 侧预计算 | ✅ **1 个向量** | ✅ **N 个向量** | ❌ **不能** |
-| 检索复杂度 | $O(1)$（查 ANN） | $O(N_q \times N_d)$ 点积 | ❌ **$O(N)$ 次完整前向** |
-| 延迟（top-100） | ~5 ms | ~20 ms | **~100-200 ms** |
-| **存储** | ✅ **1×** | ❌ **每 token 一个向量**（🧮 约为 doc token 数倍；📄 ColBERTv2 的残差压缩把空间降 6-10×） | ✅ **0**（不存向量） |
-| 精度 | 基线 | **接近 cross** | **最高** ✅ |
-| **用在哪** | ⭐ **全库召回** | 中等规模的召回/重排 | ⭐ **top-100 精排** |
-
-### 📐 为什么 Cross-encoder 更准——信息论视角
-
-**Bi-encoder 的信息瓶颈**：
-$$d \xrightarrow{\text{压缩}} \underbrace{v_d \in \mathbb{R}^{1024}}_{\textbf{在看到 } q \textbf{ 之前}} \xrightarrow{\ \cos(v_q, v_d)\ } \text{score}$$
-
-**关键**：$v_d$ 是 $d$ 的**一个固定的、query 无关的**表示。
-- 一个 2000 字的文档，**信息量远超 1024 个浮点数**
-- 压缩时必须**扔掉东西**
-- **但扔什么？** —— **不知道 query 会问什么，只能扔"平均意义上最不重要"的**
-- → **如果 query 恰好关心被扔掉的那部分，就完蛋**
-
-**Cross-encoder 没有这个瓶颈**：
-$$(q, d) \xrightarrow{\text{联合编码}} \text{score}$$
-- **在知道 $q$ 的前提下**去读 $d$
-- attention 让 $q$ 的 token **直接指向** $d$ 里相关的部分
-- **没有"提前压缩"这一步**
-
-$$\boxed{\text{bi-encoder 的天花板 = "1024 维能表达多少"；cross-encoder 没有这个天花板}}$$
-
-**ColBERT 的折中**：
-$$d \xrightarrow{\text{压缩}} \{v_{d_1}, \ldots, v_{d_N}\} \quad (\textbf{N 个向量，不是 1 个})$$
-- **信息瓶颈从 "1024 维" 放宽到 "N × 1024 维"** —— **宽了 N 倍**
-- 但交互仍然是**浅的**（只有最后的 MaxSim，没有多层 attention）
-- → **精度在两者之间，且偏 cross-encoder**
-
-**这个"信息瓶颈"的框架能把三者串起来讲，是这题的满分答案。**
-
-### 🔥 高频追问 Top 3
-
-**Q：能不能用 LLM 直接做 rerank？**
-
-A：**能，而且有三种做法，代价递增、效果递增。**
-
-| 方式 | 做法 | 优点 | 缺点 |
-|---|---|---|---|
-| **Pointwise** | 逐个问"这文档和问题相关吗？0-10 分" | 简单、可并行 | **贵（N 次调用）**、**分数不校准**（LLM 打分很随意） |
-| **Pairwise** | "A 和 B 哪个更相关？" | 更准（**又是相对！**） | $O(N^2)$ 或 $O(N\log N)$ 次，**极贵** |
-| **★Listwise (RankGPT)★** | **一次给 20 个文档，让 LLM 输出完整排序** | **效果最好**、一次调用 | context 有限（要滑窗）、**输出格式要约束** |
-
-**Pointwise 的"分数不校准"是个真实的问题**：LLM 给的 7 分和 8 分，**没有稳定的含义** —— 换个 prompt、换个批次就变了。**这又是"绝对分数不可靠"的一个例子**（Q4 的主线）。所以 **pairwise/listwise 用"相对比较"反而更准**。
-
-**LLM rerank 的定位**：
-- ✅ **零样本能力强** —— 没有领域标注数据、cross-encoder 效果差时，**LLM 是救命稻草**
-- ✅ **能理解复杂的相关性**（"这个文档虽然没提到 X，但它讲的 Y 是 X 的前提"）—— cross-encoder 学不到这种推理
-- ❌ **贵**：一次 rerank 20 个文档 ≈ 一次完整的 LLM 调用，**延迟 +500ms~2s**
-- ❌ **RankGPT 的输出要约束**（"1 > 5 > 3 > ..."）→ **约束解码**（第 14 章 Q8）
-
-**实践建议**：
-> **"先用 bge-reranker（几十毫秒、免费、效果够好）。**
-> **只在<u>高价值、低 QPS</u> 的场景（法律检索、医疗、深度研究）才考虑 LLM rerank —— 那里的延迟预算是秒级，而且准确率的价值远超成本。"**
-
-> 💡 **有意思的联系**：**Agentic RAG（Q7）某种意义上就是"把 rerank 交给 Agent"** —— Agent 读了检索结果，自己判断"够不够、要不要再检索"。**这是 rerank 的<u>终极形态</u>：不只是排序，而是决策。**
-
-**Q：rerank 的延迟怎么优化？**
-
-A：**四招，按性价比排。**
-
-**成本来源**（💭 下表收益数字是量级示意，依赖模型、硬件和 doc 长度，请自己压测）：top-100 × cross-encoder 前向。且**每个前向的输入是 `q + d`**，d 可能有 512 token → **100 × 512 = 51200 token 的计算**。
-
-| 招 | 做法 | 收益 |
-|---|---|---|
-| **① 缩小 top-k** ⭐ | **100 → 30**（靠 RRF 先做廉价粗排！Q4） | **3.3×**，且几乎不掉点 |
-| **② 用小模型** ⭐ | bge-reranker-**base**(110M) 而不是 **large**(560M) | **5×**，掉 1-2 点 |
-| **③ Batch 化** ⭐ | 100 个 (q,d) 对**一次前向**（padding 到同长） | **5-10×** ← **最容易被忽略的一招** |
-| **④ 截断 doc** | 只 rerank 每个 doc 的**前 256 token** | 2× |
-| **⑤ 换 ColBERT** | doc 侧预算 | **5×**，但**存储 ×30** |
-| **⑥ 缓存** | 相同 (q, d) 对的分数缓存 | 看重复率 |
-
-> 🚨 **第 3 招最实用也最容易被忽略**：很多人的 rerank 是**一个一个跑的 for 循环**！
-> ```python
-> # ❌ 反模式
-> scores = [reranker(q, d) for d in docs]    # ← ★100 次前向，每次 batch=1★
-> #    → 每次都是 memory-bound（第 12 章！）→ 读一遍权重只算一个样本
->
-> # ✅ 正确
-> scores = reranker([(q, d) for d in docs])  # ← ★一次前向，batch=100★
-> #    → ★权重只读一次，被 100 个样本摊薄★ → 快 5-10 倍
-> ```
-> **这就是第 12 章 Roofline 的直接应用** —— rerank 模型很小（110M = 220MB），**batch=1 时严重 memory-bound**，加 batch 几乎是免费的。
->
-> **能把"rerank 要 batch 化，因为 batch=1 是 memory-bound"这句话说出来，说明你把第三部分的知识<u>迁移</u>过来了。**
-
-**第 1 招的逻辑也值得强调**：
-$$\text{RRF 是"免费的粗排"} \Rightarrow \text{它把 100 个候选收窄到 30} \Rightarrow \text{rerank 的成本降 3.3 倍}$$
-**这就是"分级处理"的价值：每一级都用<u>刚好够用</u>的成本。**
-
-**Q：Rerank 之后的文档，怎么放进 prompt？**
-
-A：**三个技巧，都是免费的，加起来能有几个点。**
-
-**① 摆放顺序 —— Lost in the Middle**（Q1）
-```
-❌ [1st][2nd][3rd][4th][5th]     ← 顺序放，后面几个落在"中间"，容易被忽略
-✅ [1st][3rd][5th][4th][2nd]     ← ★最相关的放开头和结尾★
-```
-**为什么**：U 形曲线 —— 模型对开头和结尾的召回率最高。**把最重要的放在模型"看得最清"的位置。**
-
-**② 加元数据 —— 让模型能判断和引用**
-```
-❌ 裸文本：
-   "营收增长 30%..."
-
-✅ 带元数据：
-   [文档 1] 来源：ACME 2023 Q2 财报.pdf | 章节：营收分析 | 日期：2023-08-01
-   营收增长 30%...
-```
-**三个收益**：
-- **模型能<u>引用</u>**（"根据文档 1..."）→ **降低幻觉**（Q1 追问 1）
-- **模型能<u>判断时效</u>**（看到"2019 年"的文档会知道可能过时）
-- **模型能<u>判断权威性</u>**（官方文档 vs 论坛帖）
-
-**③ 明确的指令**
-```
-"仅根据以下文档回答。每个论断后标注来源编号 [1][2]。
- 如果文档中没有相关信息，请明确说明'根据现有资料无法回答'。"
-```
-- **"仅根据"** → 抑制模型用参数知识
-- **"标注来源"** → **逼它真的去看**（最有效的一招）
-- **"允许说不知道"** → 给它一个**不编**的出口
-
-> 💡 **一个 Agent 场景的重要提醒**（连回第 12 章 Q7）：
->
-> **检索结果应该放在 prompt 的<u>哪个位置</u>？**
-> - 放**前面**（靠近 system）→ ❌ **每次 query 的检索结果都不同 → 后面的所有内容前缀全废 → Prefix Caching 命中率归零！**
-> - 放**后面**（靠近用户问题）→ ✅ **system + tools + few-shot 的前缀全部命中**
->
-> **"变化的东西放最后"这条铁律，在 RAG 的 prompt 组装上同样成立。**
-
-### ⚠️ 常见陷阱
-
-1. **说不清 bi-encoder 的信息瓶颈** —— **"压缩 doc 时 query 还没出现"**，这是这题的题眼。
-2. **不知道 ColBERT** —— 它是"中间路线"，体现了 late interaction 的思想。
-3. **rerank 不 batch 化** —— **for 循环跑 100 次前向，batch=1 严重 memory-bound**。
-4. **忘了 Lost in the Middle 的摆放技巧** —— **免费的几个点**。
-5. **检索结果放 prompt 前面** —— **毁掉 Prefix Caching**。
-6. **在全库上跑 cross-encoder** —— $O(N)$ 次前向，不可能。
-
-### 📚 延伸阅读
-- [ColBERT](https://arxiv.org/abs/2004.12832) / [ColBERTv2](https://arxiv.org/abs/2112.01488) - **late interaction**
-- [RankGPT](https://arxiv.org/abs/2304.09542) - LLM listwise rerank
-- [bge-reranker](https://huggingface.co/BAAI/bge-reranker-v2-m3) - 中文首选
-
----
-
-## Q6：Query 改写、路由、HyDE ⭐⭐⭐⭐⭐（必问·实战）
-
-### 🎯 一句话标答
-
-> 根本问题是 **"用户的 query 和文档的表述<u>不匹配</u>"**——**多轮场景的指代必须消解**（"它的价格呢？" 单独拿去检索是**垃圾**，这是最容易被忽略但最致命的一步）；**HyDE** 的洞察是"**query 是疑问句、doc 是陈述句，两者天然不同构**"，所以**让 LLM 先假想一个答案（内容错了没关系，只要"形状"对），用它去检索**——把非对称检索**变成**对称检索；而 **Query Routing** 是生产系统的**必需品**——**单一检索策略一定是次优的**，尤其"**不检索**"必须是一个显式选项，因为**不该检索时检索到的无关内容会把模型带偏**。
-
-### 🗣️ 30 秒口语版
-
-"这题分三块：**改写、HyDE、路由**。**路由是最重要的**。
-
-**第一块：Query 改写 —— 最容易被忽略但最致命**
-
-**问题**：用户的 query 经常**不适合直接拿去检索**。
-
-| 问题 | 例子 | 后果 |
-|---|---|---|
-| **★多轮指代★** | "它的价格呢？" | ⭐ **单独检索 = 垃圾**（"它"是什么？） |
-| 太短/太模糊 | "这个怎么办" | 检索不到 |
-| 口语 vs 书面 | "咋退货" vs 文档里的"退换货流程" | 词不匹配 |
-| **一个 query 多个子问题** | "对比 A 和 B 的营收和员工数" | **一次检索抓不全** |
-
-$$\boxed{\text{多轮场景，Query 改写是必需的，不是可选的}}$$
-
-```
-历史：用户："iPhone 15 Pro 怎么样？"  助手："...（介绍）"
-当前：用户："★它的价格呢？★"
-
-❌ 直接检索 "它的价格呢"  → 检索到一堆无关的"价格"文档 ❌
-✅ 改写成 "iPhone 15 Pro 的价格"  → ✅
-```
-**这一步没做，多轮 RAG 直接废掉。而且它<u>不会报错</u>，只是默默地效果差** —— 这是最隐蔽的坑。
-
-**改写的四种形态**：
-| 技术 | 做法 | 用于 |
-|---|---|---|
-| **★指代消解★** | 结合历史改写成**独立** query | ⭐ **多轮必需** |
-| **Multi-Query / RAG-Fusion** | 生成 N 个不同角度的 query，**分别检索，RRF 融合** | 提高召回 |
-| **Query 分解** | "对比 A 和 B" → "A 的营收" + "B 的营收" | **多跳/对比问题** |
-| **Step-back** | 先问一个**更抽象**的问题检索背景 | 需要背景知识时 |
-
-**第二块：HyDE —— 一个很漂亮的 trick**
-
-**洞察**（接 Q3 的"非对称检索"）：
-```
-query: "苹果的 CEO 是谁？"          ← ★疑问句，短★
-doc:   "蒂姆·库克自 2011 年起..."   ← ★陈述段落，长★
-
-★两者天然不同构 → embedding 空间有 gap★
-```
-
-**HyDE 的做法**：**让 LLM 先"假想"一个答案，用<u>假想答案</u>的 embedding 去检索**。
-
-```
-query → LLM: "请回答：苹果的 CEO 是谁？"
-      → 假想答案: "苹果公司的 CEO 是史蒂夫·乔布斯，他自 1997 年..."
-                   ↑ ★内容错了！★（乔布斯已经不是了）
-      → ★但没关系★ —— 用这个假想答案的 embedding 去检索
-      → 检索到真正的文档 ✅
-```
-
-**为什么内容错了还有效？——这是本题最精彩的一点**：
-$$\boxed{\text{假想答案是陈述句，和真实文档同构 —— 它捕捉的是"答案该长什么样"，不是"答案是什么"}}$$
-
-"苹果公司的 CEO 是 XXX，他自 YYYY 年起..." —— **这个<u>句式、词汇、话题</u>，和真实文档高度相似**，哪怕 XXX 填错了。
-
-**HyDE = 把非对称检索<u>转化</u>成对称检索。**
-
-**代价**：多一次 LLM 调用（**延迟 +300-800ms，成本翻倍**）。
-
-**什么时候用**：
-- ✅ **zero-shot / embedding 模型没在你的领域微调过** → 收益最大
-- ❌ **embedding 模型已经针对性微调过** → **收益很小，不值那个延迟**
-
-**第三块：★Query Routing★ —— 生产系统的必需品**
-
-**核心命题**：**单一检索策略一定是次优的。**
-
-| Query 类型 | 例子 | **策略** |
-|---|---|---|
-| **事实查询** | "退货政策是什么" | 向量 + BM25 混合 |
-| **精确查找** | "错误码 E4032" | ⭐ **BM25 为主** |
-| **关系 / 多跳** | "A 和 B 是什么关系" | ⭐ **GraphRAG**（Q7） |
-| **汇总 / 统计** | "有多少个客户" | ⭐ **Text2SQL** ← 向量检索**根本做不了** |
-| **时效性** | "最新的政策" | 加**时间过滤**，按时间排序 |
-| **★闲聊★** | "你好" / "你是谁" | ⭐⭐ **不检索！** |
-| **需要计算** | "去年增长率" | **工具调用**（第 17 章） |
-
-> 🚨 **"不检索"是最重要的一个选项，也是最多人漏掉的。**
->
-> 用户说"你好"，你去检索 → 检索到一堆无关文档塞进 context → **模型被带偏，开始瞎聊产品**。
->
-> **"不该检索时检索了"是 RAG 系统的一大失败来源。**
-
-$$\boxed{\text{"总是 GraphRAG" 和 "总是向量检索" 一样错}}$$
-
-**路由的实现（三选一）**：
-1. **LLM 分类**（最灵活）：一次小模型调用，输出类别。**延迟 +100-300ms**
-2. **小分类模型**（最快）：BERT 级别的分类器，**几毫秒**。要标数据
-3. **规则**（最省）：正则匹配错误码格式、关键词匹配。**覆盖不全但零成本**
-
-**实践**：**规则兜底 + 小模型分类**。LLM 分类留给复杂场景。"
-
-### 📐 HyDE 的完整流程
-
-```python
-HYDE_PROMPT = """请写一段话回答下面的问题。
-不需要保证事实准确，只需要写出一个【看起来像标准答案】的段落。
-
-问题：{query}
-段落："""
-
-def hyde_retrieve(query, k=10, n_hypo=1):
-    # ① 生成假想文档（可以生成多个，提高鲁棒性）
-    hypos = [llm(HYDE_PROMPT.format(query=query), temperature=0.7)
-             for _ in range(n_hypo)]
-
-    # ② 用★假想文档★的 embedding 检索（不是 query 的！）
-    embs = [embed(h) for h in hypos]
-
-    # ③ 多个假想文档时：★平均 embedding★（降噪）
-    #    直觉：假想答案有噪声，平均能把"共性"（真正的答案模式）留下，
-    #          把"个性"（各自编错的细节）抵消掉
-    query_emb = np.mean(embs, axis=0)
-
-    # （可选）★和原始 query 的 embedding 混合★——防止假想跑偏太远
-    query_emb = 0.7 * query_emb + 0.3 * embed(query)
-
-    return vector_search(query_emb, k=k)
-```
-
-> **注意 `temperature=0.7` 和 `n_hypo > 1`**：
-> - 生成**多个**假想文档再平均，能**降低"假想跑偏"的风险**
-> - **平均的直觉**：假想答案的**共性**（正确的话题、句式、术语）会被保留，**个性**（各自编错的具体细节）会互相抵消
-> - **这和 Self-Consistency 是同一个思想**（第 14 章 Q1 追问 2）—— **多采样几次，平均掉噪声**。而且**同样需要 temperature > 0**！
->
-> **和原 query 混合（那行 0.7/0.3）是个实用的保险** —— 防止 LLM 的假想完全跑偏。
-
-### 🔍 Query 改写技术对比
-
-| 技术 | 输入 → 输出 | 额外 LLM 调用 | 额外检索 | 用于 |
-|---|---|---|---|---|
-| **★指代消解★** | 历史+query → 独立 query | 1 | 0 | ⭐ **多轮必需** |
-| **HyDE** | query → 假想答案 | 1（或 n） | 0 | 无领域微调时 |
-| **Multi-Query** | query → N 个 query | 1 | **N**（要 RRF 融合） | 提高召回 |
-| **分解** | 复杂 query → 子问题 | 1 | N | **多跳 / 对比** |
-| **Step-back** | 具体 → 抽象 | 1 | 2 | 需要背景 |
-
-**延迟的账（必须算，这是实战判断）**：
-```
-基线 RAG:            检索 20ms + LLM 2000ms  = 2020 ms
-+ 指代消解:          + 200ms (小模型)         = 2220 ms  ✅ ★多轮必需，值★
-+ HyDE:              + 500ms                  = 2720 ms  ⚠️ ★要看收益★
-+ Multi-Query(N=3):  + 500ms + 3×20ms         = 2780 ms  ⚠️
-+ 路由:              + 100ms (小模型)          = 2120 ms  ✅ ★便宜，值★
-
-★全都上：3500ms+ → 用户会跑★
-```
-
-$$\boxed{\text{每一个"高级技巧"都要付延迟。必须用评测集证明它的收益超过延迟的代价。}}$$
-
-**优先级建议**：
-1. ⭐ **指代消解**（多轮必需，且可以用**小模型**做，200ms）
-2. ⭐ **路由**（便宜，且**收益最大** —— 尤其"不检索"这一条）
-3. **分解**（只对复杂 query 开 —— **靠路由决定！**）
-4. **HyDE / Multi-Query**（**只在评测证明有收益时**才上）
-
-### 🔥 高频追问 Top 3
-
-**Q：Query 改写用大模型还是小模型？**
-
-A：**小模型，甚至微调一个专用的——这题考成本意识。**
-
-**为什么可以用小模型**：
-- **指代消解是个"简单"任务** —— 它需要的是**语言学能力**（找出"它"指代什么），不是**知识**或**推理**
-- 一个 **1-3B 的模型微调之后，效果接近 GPT-4，延迟只有 1/10**
-- 甚至可以用**规则 + 小模型**兜底
-
-**为什么不能用大模型**：
-- **延迟**：query 改写在**关键路径的最前面** —— 它的延迟会**直接加到 TTFT 上**
-- **成本**：**每个** query 都要过一遍
-
-**方案**（按推荐度）：
-| 方案 | 延迟 | 效果 | 推荐 |
-|---|---|---|---|
-| **微调 1-3B 专用模型** | **~100ms** | 好 | ⭐⭐⭐ **最优** |
-| 用主模型 + **few-shot** | ~500ms | 好 | ⭐⭐ 简单场景 |
-| **规则**（代词检测 → 只在有代词时才改写） | **0ms** | 覆盖不全 | ⭐⭐ **和上面组合** |
-
-> 💡 **"规则 + 模型"的组合最实用**：
-> ```python
-> if has_pronoun(query) or is_too_short(query):  # ← ★免费的过滤★
->     query = rewrite(query, history)             # ← 只有 30% 的 query 需要改写
-> # → ★平均延迟只有 0.3 × 100ms = 30ms★
-> ```
-> **"先用零成本的规则过滤，只对需要的 query 调模型"** —— 这个思路和 Q5 的"RRF 做廉价粗排"、第 14 章的"投机解码猜了再验"是**同一个**：**分级处理，只在必要时付出昂贵的成本。**
-
-**Q：Multi-Query 和 RAG-Fusion 是一回事吗？**
-
-A：**RAG-Fusion = Multi-Query + RRF。后者是前者的"完整版"。**
-
-```
-【Multi-Query】
-  query → LLM 生成 3 个变体
-        → 分别检索
-        → ★简单去重合并★     ← ★问题：怎么排序？★
-
-【RAG-Fusion】
-  query → LLM 生成 3 个变体
-        → 分别检索（★每路都是一个有序 ranking★）
-        → ★RRF 融合★         ← ★用 Q4 的 RRF！★
-        → 有序的 top-k
-```
-
-**RRF 在这里的作用**（和 Q4 是同一个逻辑）：
-- **被<u>多个</u>变体都召回的文档 → 排前面**（**共识**！）
-- **只被一个变体召回的 → 排后面**
-- **完全不用管各路的分数怎么比**
-
-$$\boxed{\text{RAG-Fusion 的本质：用 query 的多样性做"集成学习"，用 RRF 做"投票"}}$$
-
-**这和 Self-Consistency（第 14 章 Q1）是同一个思想**：**多采样几条路径，投票，降低单条路径的方差。**只不过：
-- **Self-Consistency**：对**生成**采样，对**答案**投票
-- **RAG-Fusion**：对**query**采样，对**文档排名**投票
-
-**代价**：$N$ 倍的检索（但检索便宜）+ 1 次 LLM 调用（生成变体）。
-
-**什么时候用**：
-- ✅ **用户 query 的表述和文档差异大**（口语 vs 书面）
-- ✅ **一个问题有多个角度**
-- ❌ **query 已经很清晰** → **纯浪费延迟**
-- ⭐ **所以要靠路由决定要不要开！**
-
-**Q：路由错了怎么办？有没有兜底？**
-
-A：**必须有兜底——而且"宁可多检索，不可少检索"这个默认是<u>错的</u>。**
-
-**路由的两类错误，代价<u>不对称</u>**：
-
-| 错误 | 例子 | 后果 | 严重性 |
-|---|---|---|---|
-| **该检索却没检索** | 把"我们的退货政策"判成闲聊 | **模型用参数知识瞎编** | ⭐⭐⭐ **严重** |
-| **不该检索却检索了** | 用户说"谢谢"，检索到一堆文档 | **模型被带偏，答非所问** | ⭐⭐ **也很严重** |
-
-> ⚠️ **注意——很多人的直觉是"宁可多检索"，这是<u>错的</u>！**
->
-> **检索到无关内容<u>不是"无害的冗余"</u>** —— LLM 会**试图使用**塞给它的 context（这是 instruction following 训练的结果！）。**给它垃圾，它就会认真地基于垃圾回答。**
->
-> **"多检索无害"这个假设不成立** —— 这也呼应 Q1 追问 1："**有时候检索到垃圾，比什么都没检索到更坏。**"
-
-**三层兜底**：
-
-**① 软路由（不是硬分类）**
-```python
-# ❌ 硬分类：一旦分错，无法挽回
-if classify(query) == "chitchat":
-    return answer_without_rag(query)
-
-# ✅ 软路由：★检索但让模型自己判断★
-docs = retrieve(query)
-if max(rerank_scores(query, docs)) < THRESHOLD:   # ← ★分数太低 = 没有相关内容★
-    docs = []                                      # ← ★丢弃，别塞垃圾★
-prompt = build(query, docs)
-```
-**关键**：**用 rerank 的分数做"相关性阈值"** —— 检索到了但都不相关 → **主动丢弃**。**这比路由分类器更可靠**，因为它是**基于实际检索结果**判断的，不是基于 query 猜的。
-
-**② prompt 层兜底**
-```
-"以下文档【可能】与问题相关，也可能不相关。
- 如果不相关，请忽略它们，直接回答问题。"
-```
-—— **给模型一个"忽略 context"的许可**。这一句能显著降低"被垃圾带偏"的概率。
-
-**③ Agentic 兜底（最强，第 18 章）**
-> **把检索变成一个<u>工具</u>，让模型<u>自己决定</u>要不要调用。**
->
-> —— **这是路由的终极形态**：不再是"外部分类器猜用户想干嘛"，而是"**模型自己判断我需不需要查资料**"。而且它可以**多次检索**（"第一次没查到，换个词再查"）。
->
-> **这正是从 RAG 走向 Agentic RAG 的动机**（Q7 / 第 18 章）。
-
-**"用 rerank 分数做阈值兜底 + 给模型忽略 context 的许可 + 最终走向 Agentic"** —— 这三层能讲出来，这题就满分了。
-
-### ⚠️ 常见陷阱
-
-1. **多轮不做指代消解** —— ⭐ **最致命，且不会报错，只是默默地效果差**。
-2. **说不清 HyDE 为什么"错了也有效"** —— **假想答案捕捉的是"答案该长什么样"，是<u>形状</u>不是内容**。
-3. **不知道"不检索"是个选项** —— **不该检索时检索会把模型带偏**。
-4. **以为"多检索无害"** —— ❌ **LLM 会认真地基于垃圾回答**。
-5. **所有技巧都上** —— **每个都要付延迟**，要用评测集证明收益。
-6. **Query 改写用大模型** —— **它在关键路径最前面**，延迟直接加到 TTFT 上。
-
-### 📚 延伸阅读
-- [HyDE](https://arxiv.org/abs/2212.10496) - Precise Zero-Shot Dense Retrieval without Relevance Labels
-- [Query2doc](https://arxiv.org/abs/2303.07678) - 和 HyDE 同期的独立工作
-- [Step-Back Prompting](https://arxiv.org/abs/2310.06117) - Google
-- [RAG-Fusion](https://arxiv.org/abs/2402.03367)
-
----
-
-## Q7：高级 RAG——GraphRAG / CRAG / Agentic ⭐⭐⭐⭐（进阶）
-
-### 🎯 一句话标答
-
-> **GraphRAG** 用 LLM 抽实体关系建图 + **Leiden 社区检测 + 为每个社区生成摘要**，从而能回答 **"这份语料的主题是什么"** 这类 **top-k 检索<u>永远</u>答不了的全局性问题**——但**极贵**（每个 chunk 都要过 LLM 抽实体）；**CRAG** 用一个轻量评估器给检索结果打分，不行就 **fallback 到 web search**，**比 Self-RAG 实用**（不用改模型）；**Agentic RAG** 把检索变成**工具**，让模型自己决定查什么、够不够、要不要再查——**这是终极形态**；但最重要的一句是：**90% 的场景，"好 chunking + 混合检索 + rerank + 改写" 就够了，高级技术是<u>特定场景的专用工具</u>，靠<u>路由</u>决定何时启用，不是通用升级**。
-
-### 🗣️ 30 秒口语版
-
-"这题的**正确姿态**很重要：**不要把这些当成"RAG 2.0"**，它们是**专用工具**。
-
-**GraphRAG（Microsoft）**
-
-**它解决的问题**（这个必须先说清）：**传统 RAG 回答不了"全局性"问题**。
-
-```
-问："这份 500 页的调研报告，★主要讲了哪几个主题？★"
-
-传统 RAG：检索 top-5 chunk → 每个 chunk 只是 500 页中的 500 字
-        → ★根本看不到全貌★ → 答不了 ❌
-        
-★这不是"检索得不够准"，是"top-k 这个范式本身答不了"★
-```
-
-**GraphRAG 的做法**：
-```
-【离线，★极贵★】
-  ① 每个 chunk 过 LLM → 抽取【实体】和【关系】
-  ② 建成知识图谱
-  ③ ★Leiden 算法做社区检测★（把图切成一簇簇紧密相连的子图）
-  ④ ★为每个社区生成摘要★（再过一遍 LLM）—— 而且是【层次化】的（社区的社区）
-
-【在线】
-  Local Search：  从实体出发找邻居 → 回答"A 和 B 什么关系"
-  ★Global Search★：用【社区摘要】做 map-reduce → 回答"主题是什么"
-                    ↑ ★这才是 GraphRAG 的杀手锏★
-```
-
-**代价（必须主动说）**：
-- ❌ **极贵**：一本书可能要 **几百美元** 的 LLM 调用
-- ❌ **索引时间长**（小时级）
-- ❌ **更新困难**：加一个文档可能要**重算社区**
-- ❌ **实体抽取的质量决定一切**（LLM 抽错了，图就是错的）
-
-$$\boxed{\text{所以：GraphRAG 只在必要时用，靠路由决定（Q6）}}$$
-
-> 💡 **这正是你笔记里那条"通过纠正学到"的经验**：**"总是 GraphRAG" 是错的，生产系统<u>按 query 类型路由</u>**。
->
-> **多跳/关系/全局问题 → GraphRAG；事实查询 → 普通 RAG。** 一个语料可以**同时**建两套索引，靠路由分发。
-
-**CRAG（Corrective RAG）—— 比 Self-RAG 实用**
-
-**做法**：一个**轻量的检索评估器**给检索结果打分：
-| 判定 | 动作 |
-|---|---|
-| **Correct** | ✅ 用它 + **decompose-then-recompose**（提炼关键句，去噪） |
-| **Incorrect** | ❌ **丢弃，fallback 到 ★web search★** |
-| **Ambiguous** | ⚠️ **两者都用** |
-
-✅ **不用改模型**（评估器是个独立的小模型）→ **比 Self-RAG 实用得多**
-
-**Self-RAG**：训练模型输出**反思 token**：`[Retrieve?]` `[IsRel]` `[IsSup]` `[IsUse]` —— 模型自己决定要不要检索、相不相关、有没有依据。
-- ✅ 思路优雅（**把判断内化进模型**）
-- ❌ **需要训练** → 工程上少见
-- ❌ **换个模型就得重训**
-
-**Agentic RAG —— 终极形态（第 18 章）**
-
-> **把检索变成一个<u>工具</u>，让 Agent 循环决定：查什么、够不够、要不要再查、换个词再查。**
-
-```
-Thought: 用户问 A 和 B 的营收对比，我需要分别查
-Action: search("A 公司 2023 营收")
-Observation: ...
-Thought: 拿到 A 的了，还需要 B 的
-Action: search("B 公司 2023 营收")
-Observation: ★没找到★
-Thought: 换个说法试试
-Action: search("B 公司 年度财报 收入")     ← ★自我修正！★
-Observation: ...
-Thought: 够了，可以回答了
-```
-
-**它<u>统一</u>了前面所有的技巧**：
-| 传统 RAG 的组件 | 在 Agentic RAG 里 |
-|---|---|
-| Query 改写 | **Agent 自己想 query** |
-| Query 分解 | **Agent 自己拆成多次检索** |
-| 路由 | **Agent 自己选工具**（向量库？SQL？web？） |
-| CRAG 的评估 | **Agent 自己判断"够不够"** |
-| 多次检索 | **循环** |
-
-$$\boxed{\text{Agentic RAG = 把"人工设计的流程"变成"模型自己的决策"}}$$
-
-**代价**：**延迟 ×N**（多轮循环）、**不可控**（可能死循环）、**贵**
-
-**最后，最重要的一句（面试请说这句）**：
-> **"90% 的场景，'好的 chunking + 混合检索 + rerank + query 改写' 就够了。**
-> **GraphRAG、Self-RAG 这些是<u>特定场景的专用工具</u>，不是通用升级。**
-> **先把基础做扎实，再靠<u>评测</u>决定要不要上高级方案。"**"
-
-### 🔍 高级 RAG 技术对比
-
-| | **GraphRAG** | **CRAG** | **Self-RAG** | **Agentic RAG** |
-|---|---|---|---|---|
-| 核心 | **实体图 + 社区摘要** | **评估器 + web fallback** | **反思 token** | **检索即工具 + 循环** |
-| 要训练 | ❌ | ❌（要训评估器） | ✅ **要改模型** | ❌ |
-| **索引成本** | ❌❌ **极高** | 正常 | 正常 | 正常 |
-| 查询成本 | 中 | 中 | 低 | ❌ **高（多轮）** |
-| **解决什么** | ⭐ **全局性 / 多跳问题** | **检索质量差** | 该不该检索 | ⭐ **复杂任务** |
-| 更新 | ❌ **困难** | ✅ | ✅ | ✅ |
-| 工业采用 | ⚠️ **特定场景** | ⚠️ 少 | ❌ **几乎没有** | ⭐ **上升中** |
-| **何时用** | **靠路由**决定 | 检索不稳时 | — | ⭐ **Agent 场景** |
-
-### 📐 GraphRAG 的 Global Search
-
-**为什么 top-k 答不了全局问题**（这是个信息论问题，不是工程问题）：
-
-$$\text{传统 RAG：} \quad \text{答案} = f(\underbrace{\text{top-}k \text{ chunks}}_{k \times 512 \text{ token}})$$
-
-**500 页的报告 ≈ 25 万 token。top-5 只看到 2560 token = <u>1%</u>。** 问"主题是什么"，**它连 1% 都没看全**。
-
-$$\text{GraphRAG Global Search：}$$
-```
-① 每个社区摘要 + query → LLM → 一个"部分答案" + 一个【相关性打分】
-   （★这一步可以完全并行★ —— map）
-② 按分数排序，把 top 的部分答案汇总 → LLM → 最终答案
-   （reduce）
-
-→ ★等效于"看过了全部内容"★，但用的是【压缩过的社区摘要】
-```
-
-$$\boxed{\text{Global Search = 层次化压缩 + map-reduce —— 用摘要的摘要来"看全局"}}$$
-
-**这是个"用<u>结构</u>换<u>覆盖</u>"的方案**：
-- 传统 RAG：**平的** → 只能采样（top-k）→ **覆盖率低**
-- GraphRAG：**层次的** → 可以自底向上聚合 → **覆盖率 100%**（但是压缩过的）
-
-> 💡 **这和第 15 章 FlashAttention 的 online softmax、Q7 的 map-reduce 是同一个思想**：
-> **"东西太大装不下 → 分块处理 + 增量/并行聚合"**。
-> **只不过这里聚合的是<u>语义</u>，聚合器是 LLM。**
-
-### 🔥 高频追问 Top 3
-
-**Q：GraphRAG 什么时候值得？成本怎么控？**
-
-A：**值得的条件很苛刻，且有便宜的平替。**
-
-**值得的条件（要<u>全部</u>满足）**：
-1. ✅ 语料**相对静态**（不频繁更新 —— 因为更新要重算社区）
-2. ✅ 有**大量全局性 / 多跳查询**（"主题是什么"、"A 和 B 通过谁联系"）
-3. ✅ 语料**高价值**（法律案卷、医疗记录、情报分析、企业知识图谱）
-4. ✅ 语料**规模适中**（TB 级的话，索引成本会爆炸）
-
-**不值得的**：
-- ❌ FAQ、产品文档、客服知识库 → **99% 是事实查询，普通 RAG 完胜**
-- ❌ 频繁更新的语料
-- ❌ 大规模、低价值语料
-
-**成本控制的四招**：
-1. ⭐ **用小模型抽实体**（GPT-4o-mini / Qwen-7B 级别就够了）—— **实体抽取是个相对简单的任务**
-2. ⭐ **只对<u>部分</u>高价值文档建图**（**混合方案**：核心文档建图，其余走普通 RAG）
-3. ⭐ **★Prefix Caching★** —— **抽实体的 prompt 前缀是固定的**（few-shot 示例 + 指令），**命中率极高**（第 12 章 Q7）！
-4. **增量更新**：新文档只更新**受影响的社区**（工程上很难，但有工作在做）
-
-**便宜的平替（这个回答很实用）**：
-| 需求 | GraphRAG | **便宜平替** |
-|---|---|---|
-| "主题是什么" | Global Search | ⭐ **对每个文档生成摘要，检索摘要** |
-| "A 和 B 的关系" | Local Search | ⭐ **多跳检索**（先查 A，用结果查 B）或 **Agentic RAG** |
-| 实体查询 | 图 | ⭐ **实体抽取 + 元数据过滤** |
-
-> **"先问：你真的需要图，还是只需要<u>摘要</u>和<u>多跳</u>？"** —— 大部分时候是后者，而后者便宜 100 倍。
-
-**Q：Agentic RAG 的成本和延迟怎么控？**
-
-A：**四个维度，全都要控——这是它落地的核心挑战。**
-
-**成本来源**：
-```
-每轮 = 1 次 LLM 调用（思考+决定）+ 1 次检索
-5 轮 = 5 次 LLM 调用 = ★5 倍成本★
-延迟 = 5 × (2s + 0.02s) = ★10 秒★  ← ★用户会跑★
-```
-
-**四个控制手段**：
-
-| 手段 | 做法 |
-|---|---|
-| **① 硬上限** | `max_iterations = 3-5`，**超了强制出答案**（保底） |
-| **② ★Prefix Caching★** ⭐ | **ReAct 每轮只在末尾追加 observation** → **前缀命中率 94%**（第 15 章 Q7）→ **TTFT ↓15×** |
-| **③ 并行化** ⭐ | 独立的子查询**并行执行**（"A 的营收" 和 "B 的营收" **不需要串行！**） |
-| **④ 分级** | **简单 query 走普通 RAG，复杂的才走 Agentic**（**又是路由！** Q6） |
-
-> 🚨 **第 2 点是 Agent 场景最大的一刀，必须说**（这是第 15 章 Q8 场景 C 的结论）：
->
-> **ReAct 每轮的 prompt = 上一轮的 prompt + 新的 observation** —— **前缀 94% 重合**！
-> **没开 Prefix Caching 的 Agentic RAG，等于把整个历史重复 prefill 了 N 遍。**
->
-> **而且要用 SGLang 而不是 vLLM** —— RadixAttention 的**树形复用**和 Agent 的调用图**同构**（第 15 章 Q3）。
-
-**第 3 点也很实用**：很多 Agentic RAG 的实现是**傻串行**的。
-```python
-# ❌ 串行：10 秒
-for sub_q in ["A的营收", "B的营收", "C的营收"]:
-    results.append(agent_search(sub_q))
-
-# ✅ 并行：3.5 秒
-results = await asyncio.gather(*[agent_search(q) for q in sub_qs])
-```
-**独立的子查询就该并行** —— 这是免费的 3 倍加速。
-
-**Q：这些高级技术，怎么决定该不该上？**
-
-A：**用<u>数据</u>决定，不是用直觉。给一套流程。**
-
-```
-【Step 1】★先建评测集★（100-200 条，覆盖各种 query 类型）← ★没有这个，后面全是玄学★
-【Step 2】★测 baseline★：好 chunking + 混合检索 + rerank + 改写
-         → 算 Recall@k、MRR、Faithfulness（Q8）
-【Step 3】★按 query 类型分组看失败案例★  ← ★这一步是关键★
-         → 是"全局性问题"全挂了吗？    → ★考虑 GraphRAG★
-         → 是"多跳问题"全挂了吗？      → ★考虑 Agentic / 多跳检索★
-         → 是"检索质量不稳"吗？        → ★考虑 CRAG★
-         → 是"某类 query 用错了策略"吗？→ ★考虑路由（最便宜！）★
-【Step 4】★只对那一类 query 上专用方案 + 路由★
-【Step 5】测延迟和成本，算 ROI
-```
-
-**Step 3 是灵魂**：
-> **"不要看<u>总体</u>指标，要按 <u>query 类型分组</u>看失败案例。**
-> **总体 Recall 80% 可能是'事实查询 95% + 全局性问题 10%'——**
-> **这时候你该做的是<u>给全局性问题加一条路由</u>，而不是把整个系统换成 GraphRAG。"**
-
-$$\boxed{\text{"哪一类 query 挂了" 比 "总体分数是多少" 有用一百倍}}$$
-
-**这个"分组归因 → 专用方案 + 路由"的思路，是这题的满分答案**——它把 Q6（路由）、Q7（高级技术）、Q8（评估）串成了一个闭环。
-
-### ⚠️ 常见陷阱
-
-1. **把高级技术当"通用升级"** —— **它们是专用工具，靠路由启用**。
-2. **不知道 GraphRAG 解决的是"全局性问题"** —— 说成"检索更准"是没读懂。**这不是精度问题，是范式问题**。
-3. **忽略 GraphRAG 的成本** —— **一本书几百美元**，且更新困难。
-4. **Agentic RAG 不开 Prefix Caching** —— **前缀 94% 重合，不开等于浪费 15 倍**。
-5. **Agentic RAG 傻串行** —— 独立子查询该并行。
-6. **不测就上** —— 要**按 query 类型分组归因**，再决定。
-
-### 📚 延伸阅读
-- [GraphRAG](https://arxiv.org/abs/2404.16130) - **Microsoft，Global Search 的设计在 §2**
-- [Self-RAG](https://arxiv.org/abs/2310.11511)
-- [CRAG](https://arxiv.org/abs/2401.15884)
-- [Agentic RAG Survey](https://arxiv.org/abs/2501.09136)
-
----
-
-## Q8：幻觉归因与 RAGAS 评估 ⭐⭐⭐⭐⭐（必问·区分度高）
-
-### 🎯 一句话标答
-
-> RAG 的幻觉必须**归因到两类**——**检索失败**（没检索到 → 只能编）和**生成失败**（检索到了但没用/用错/加戏），**不区分就无法定位问题**；**RAGAS 的四个指标正好对应这个二分**：**Faithfulness + Answer Relevancy 测生成**，**Context Precision + Context Recall 测检索**；而最重要的实践原则是 **"先测检索，再调生成"**——**检索的召回率是整个 RAG 的<u>天花板</u>**，很多人一上来调 prompt，其实是检索的问题。
-
-### 🗣️ 30 秒口语版
-
-"这题**区分度极高**，因为它考的是"**你有没有真的上过线**"。
-
-**第一步：幻觉归因 —— 两类，必须分开。**
-
-| 类型 | 现象 | 怎么查 | **修哪里** |
-|---|---|---|---|
-| **① 检索失败** | context 里**根本没有**答案 → 模型只能编 | **Context Recall** | ⭐ **修检索** |
-| **② 生成失败** | context 里**有**答案，但模型没用/用错/加戏 | **Faithfulness** | 修 prompt / 换模型 |
-
-**第三类（最隐蔽、最危险）**：**context 本身就是错的**（知识库里存的就是过时/错误的文档）
-→ **RAG 会<u>忠实地</u>传播错误，而且因为有引用，看起来<u>更可信</u>** ❌
-→ **这个只能靠数据治理，测不出来**
-
-$$\boxed{\text{不区分这两类，你就只能"瞎调"——而 90\% 的人会去调 prompt，那是第 7 环}}$$
-
-**第二步：RAGAS 的四个指标 —— 正好对应这个二分。**
-
-**测<u>生成</u>的两个**：
-
-**① Faithfulness（忠实度）** ⭐ **最重要**
-> **答案里的每个陈述，能否从 context 推出来？**
-```
-做法：① LLM 把答案拆成一个个【原子陈述 claim】
-     ② 逐个判断：这个 claim 能被 context 支持吗？
-     ③ Faithfulness = 被支持的 claim 数 / 总 claim 数
-```
-**这直接测"有没有幻觉"**。
-
-**② Answer Relevancy（答案相关性）**
-> **答案切题吗？（不跑题、不啰嗦、不答非所问）**
-```
-做法：① 从【答案】反推 N 个"这个答案在回答什么问题"
-     ② 算这 N 个反推问题和【原问题】的 embedding 相似度
-     ③ 取平均
-```
-**巧妙**：如果答案跑题了，从它反推出的问题就和原问题不像。
-
-**测<u>检索</u>的两个**：
-
-**③ Context Precision（上下文精度）**
-> **检索到的<u>相关</u>内容，排在<u>前面</u>吗？** —— 测**排序质量**
-
-**④ Context Recall（上下文召回）** ⭐ **最重要**
-> **ground truth 里的信息，都被检索到了吗？** —— 测**召回**
-> ⚠️ **需要标注**（要有 ground truth 答案）
-
-$$\boxed{\text{Faithfulness 低 → 生成的锅；Context Recall 低 → 检索的锅。先看后者。}}$$
-
-**第三步：★先测检索★ —— 这是本题最实用的原则。**
-
-$$\boxed{\text{检索的召回率是整个 RAG 的天花板}}$$
-
-- **Recall@10 = 60%** → **40% 的问题<u>注定</u>答不对**，prompt 调出花也没用
-- **而且测检索<u>便宜</u>**：Recall@k / MRR / NDCG **不需要 LLM，可以离线大规模跑**
-- **测生成<u>贵</u>**：Faithfulness 要 LLM-as-Judge，每条要好几次调用
-
-**所以正确的顺序**：
-```
-① ★测 Recall@k★（免费、快）
-   └─ < 90%？ → ★去修检索★（chunking / 混合 / 改写 / 路由）← ★别碰 prompt★
-   └─ > 90%？ → 往下走
-② 测 MRR / NDCG（也免费）
-   └─ 低？ → ★修 rerank★
-③ ★测 Faithfulness★（贵）
-   └─ 低？ → 这才是 ★prompt / 模型★ 的问题
-④ 端到端人工 / LLM-as-Judge
-⑤ 线上 A/B
-```
-
-**第四步：怎么建评测集（必问的追问）**
-1. **从文档反向生成问题**（LLM 生成 → **人工筛**）—— 快，但**分布和真实 query 不同**
-2. **从线上真实 query 采样 + 人工标注** ⭐ —— **最准，但要人力**
-3. **至少 100-200 条**，**必须覆盖各种 query 类型**（事实/多跳/全局/精确查找/闲聊）
-
-$$\boxed{\text{★必须按 query 类型分组看指标★ —— 总体 80\% 可能是 "事实 95\% + 多跳 10\%"}}$$
-
-**这就直接指出了该做什么：给多跳加一条路由（Q6），而不是把整个系统推倒重来。**"
-
-### 🔍 RAGAS 四指标详解
-
-| 指标 | 测什么 | 需要 ground truth | 公式 | 低了怎么办 |
-|---|---|---|---|---|
-| **★Faithfulness★** | **生成有没有幻觉** | ❌ | $\dfrac{\text{被 context 支持的 claim}}{\text{总 claim}}$ | **强制引用** / 换模型 / 改 prompt |
-| **Answer Relevancy** | **答案切不切题** | ❌ | $\text{mean}\big(\cos(q,\ \hat q_i)\big)$ | 改 prompt |
-| **Context Precision** | **相关的排前面了吗** | ✅ | 加权的 precision@k | **修 rerank** |
-| **★Context Recall★** | **该检索的都检索到了吗** | ✅ | $\dfrac{\text{被 context 支持的 GT claim}}{\text{GT 总 claim}}$ | ⭐ **修检索** |
-
-**注意 Faithfulness 和 Answer Relevancy <u>不需要 ground truth</u>** —— 这意味着：
-$$\boxed{\text{它们可以在线上实时跑（对采样的真实流量），做持续监控}}$$
-
-**这是个很实用的点**：
-- **离线**：用标注的评测集测四个指标
-- **线上**：**采样 1% 的真实流量，跑 Faithfulness** → **幻觉率的实时监控**
-- **Faithfulness 突然下降** → 报警 → 查是不是有人改了 prompt / 换了模型 / 知识库进了脏数据
-
-### 📐 Faithfulness 的计算
-
-```python
-def faithfulness(question, answer, contexts):
-    # ① 把答案拆成【原子陈述】
-    claims = llm(f"""把下面的回答拆成一个个独立的、原子的事实陈述。
-每行一条，不要有多余的话。
-
-回答：{answer}""").split("\n")
-    # 例：
-    #   "苹果 2023 Q4 营收 895 亿美元"
-    #   "同比增长 2%"
-    #   "iPhone 是最大的收入来源"
-
-    # ② 逐个判断能否被 context 支持
+def faithfulness(answer, contexts):
+    claims = llm(f"把下面的回答拆成独立的原子事实陈述，每行一条：\n{answer}").splitlines()
     supported = 0
-    for claim in claims:
-        verdict = llm(f"""根据下面的上下文，判断这个陈述是否【能被明确支持】。
-只回答"是"或"否"。★上下文中没提到的，一律回答"否"★。
-
-上下文：{contexts}
-陈述：{claim}""")
-        supported += (verdict.strip() == "是")
-
-    return supported / len(claims)
+    for c in claims:
+        v = llm(f"仅根据上下文判断该陈述是否被明确支持，只答'是'或'否'。"
+                f"上下文没提到的一律答'否'。\n上下文：{contexts}\n陈述：{c}")
+        supported += v.strip() == "是"
+    return supported / max(len(claims), 1)
 ```
 
-**两个必须注意的实现细节**：
+1. **"上下文没提到的一律答否"**：否则评审模型会用自己的知识判断陈述是否属实，而我们要测的是"能否从上下文推出"。
+2. **拆分粒度决定分数**：拆得越细分数越低。💭 所以绝对值意义有限，**同一套拆分与评审设置下的相对比较**才可靠（LLM 评审的偏差见第 19 章）。
 
-1. **"没提到的一律否"** —— 这一句非常重要。**不加的话，LLM 会用<u>自己的知识</u>判断"这个陈述是对的"**，而我们要测的是"**能否从 context 推出**"，不是"**是不是事实**"。**这是个真实的实现坑。**
-
-2. **拆 claim 的粒度决定分数** —— 拆得越细，分数越低（每个细节都要被支持）。**所以 Faithfulness 的绝对值没意义，只有<u>相对比较</u>有意义**（同一套拆分逻辑下，A 方案 vs B 方案）。
-
-> 💡 **"绝对值没意义，相对比较有意义"** —— 这又是"**相对 > 绝对**"这条主线！（第五次了）
->
-> **所有 LLM-as-Judge 的指标都有这个性质**（第 19 章会详谈）：**LLM 打的绝对分数不校准，但相对排序是可靠的。**
-
-### 🔥 高频追问 Top 3
+### 🔥 高频追问
 
 **Q：只能测一个指标，测哪个？**
 
-A：**★Recall@k★（检索召回率）。理由有三条。**
+A：**检索召回（Recall@k 或 Context Recall）**。它是上限，便宜，且指向明确。Faithfulness 有一个盲区：**上下文本身是错的时候，模型忠实地复述错误，Faithfulness 仍是 100%，但答案是错的。**
 
-1. **它是<u>天花板</u>**：Recall@10 = 60% → **40% 的问题注定答不对**。**这是硬约束，不是可以靠调 prompt 绕过的**。
-2. **它<u>免费</u>**：不需要 LLM，可以在 10 万条 query 上离线跑，几分钟出结果。而 Faithfulness 每条要好几次 LLM 调用。
-3. **它<u>指向明确</u>**：Recall 低 → 就是检索的问题 → chunking / 混合检索 / query 改写 / 路由。**不会误导你去调 prompt**。
+**Q：评测集怎么建？**
 
-**为什么不是 Faithfulness**：
-- ❌ 贵（LLM-as-Judge）
-- ❌ **它高不代表系统好**！—— **如果检索到的 context 是垃圾，模型忠实地基于垃圾回答，Faithfulness 是 100%，但答案是错的** ⚠️
-- **Faithfulness 只能测"有没有<u>额外</u>编造"，测不出"检索对不对"**
+A：从文档反向生成问题再人工筛选（快，但分布与真实 query 不同）；从线上真实 query 采样标注（最可靠）。💭 至少覆盖各类 query（事实、多跳、全局、精确查找、闲聊/不该检索），并**按类型分组报告指标**。📄 ARES（Saad-Falcon et al., NAACL 2024）用合成数据微调轻量评审模型，并用少量人工标注做预测驱动推断（PPI）给出置信区间，可以作为 RAGAS 之外的另一种思路。
 
-$$\boxed{\text{Faithfulness = 100\% 且答案错误 —— 这是完全可能的，且是 RAG 最危险的失败模式}}$$
+**Q：线上怎么监控？**
 
-**这个"Faithfulness 高但答案错"的场景能说出来，是这题的加分点** —— 它说明你理解了每个指标的**边界**。
+A：
+- **免费的客观信号**：top-1 rerank 分数的分布、空召回率、检索延迟、**"无法回答"的比例**（💭 突然上升常常意味着检索链路出了问题，如 embedding 服务异常或知识库更新出错）。
+- **采样的 LLM 评审**：对小比例流量跑 Faithfulness。
+- **用户信号**：点赞/点踩、追问率、引用点击。💭 引用点击需要结合后续行为解读：用户点开引用可能是在验证一个他不太相信的答案。
 
-**Q：LLM-as-Judge 靠谱吗？**
+### 📚 出处
+- Es et al. *RAGAS: Automated Evaluation of Retrieval Augmented Generation*. EACL 2024 Demo. arXiv:2309.15217
+- Saad-Falcon et al. *ARES: An Automated Evaluation Framework for Retrieval-Augmented Generation Systems*. NAACL 2024. arXiv:2311.09476
+- Zheng et al. *Judging LLM-as-a-Judge*. NeurIPS 2023. arXiv:2306.05685
 
-A：**有系统性偏差，但"相对比较"是可靠的。（第 19 章会详谈）**
+---
 
-**四种已知偏差**：
-| 偏差 | 表现 |
-|---|---|
-| **位置偏见** | 同样的两个答案，**换个顺序，胜负就变了** |
-| **长度偏见** | **更长的答案更容易被判为好** |
-| **自我偏好** | **GPT-4 评审偏爱 GPT-4 生成的答案** |
-| **分数不校准** | 7 分和 8 分**没有稳定的含义**，换个 batch 就变 |
+## 🔬 研究前沿与开放问题
 
-**缓解**：
-- **位置偏见** → **换序跑两遍取平均**（成本 ×2，但有效）
-- **长度偏见** → 控制长度，或在 prompt 里明确"**不要因为长就给高分**"
-- **自我偏好** → **用不同厂商的模型做评审**
-- **不校准** → ⭐ **用 pairwise 比较，不用 pointwise 打分**
-
-$$\boxed{\text{LLM-as-Judge 的绝对分数不可信，相对排序（A vs B）是可信的}}$$
-
-**所以正确的用法**：
-- ❌ "我们的 Faithfulness 是 0.87" —— **这个数字本身没意义**
-- ✅ "**新方案的 Faithfulness 从 0.82 涨到 0.87，在同一套评审下**" —— **有意义**
-- ✅ **A/B 对比，用 pairwise**
-
-**"相对 > 绝对" 这条主线的第五次登场**（PPO Advantage / RLHF reward / min-p / RRF / LLM-as-Judge）。**面试时能点出这条贯穿的主线，会显得你的知识是有骨架的。**
-
-**Q：线上怎么监控 RAG 的质量？**
-
-A：**三层，各有各的用途。**
-
-```
-【① 客观指标（免费、实时）】
-  ★检索命中率★：top-1 的 rerank 分数分布 ← ★突然下降 = 知识库或 query 分布变了★
-  ★"我不知道"的比例★  ← ⭐ ★最灵敏的先行指标★
-       突然上升 = 检索挂了 / 知识库更新出问题 / embedding 服务异常
-  ★检索延迟 P99★
-  ★空召回率★（一条都没检索到）
-
-【② LLM-as-Judge（贵，采样跑）】
-  ★采样 1% 流量跑 Faithfulness★  ← ★幻觉率的实时监控★
-  → 突然下降 → 报警 → 查 prompt 改动 / 模型切换 / 脏数据入库
-
-【③ 用户信号（最真实，但有延迟和偏差）】
-  ★点击引用的比例★  ← ⭐ ★被严重低估的信号★
-       用户点了引用 = 他在【验证】 = 他【不太信】
-       ★点击率高可能意味着"答案让人怀疑"★（反直觉！）
-  点赞/点踩
-  ★追问率★  ← ⭐ ★没答好才会追问★
-  会话长度（★变长可能是坏事★ —— 说明没一次说清）
-```
-
-> 🚨 **"我不知道"的比例是最灵敏的先行指标** —— 强烈推荐。
->
-> **它<u>免费</u>、<u>实时</u>、且<u>直接反映检索健康度</u>**：
-> - embedding 服务挂了 → 检索到垃圾 → **模型说"我不知道"** → **这个比例飙升**
-> - 有人往知识库塞了脏数据 → 同上
-> - query 分布变了（比如新产品发布，用户开始问模型不知道的东西）→ 同上
->
-> **它比 Faithfulness 早几分钟报警，且不花一分钱。**
-
-**"点击引用的比例"那条也很有意思**：
-> **点击率高 ≠ 好** —— **用户点引用是因为他<u>不太信</u>，要去验证**。
-> **点击率<u>低</u>可能才是好的**（答案让人信服，不用查）。
-> **但如果点击后<u>没有追问</u>，说明验证通过了** —— **"点击 + 无追问" 才是好信号。**
->
-> **这种对用户信号的细致解读，是产品意识的体现。**
-
-### ⚠️ 常见陷阱
-
-1. **不区分两类幻觉** —— ⭐ **这是这题的核心**。不归因就只能瞎调。
-2. **一上来调 prompt** —— **先测 Recall！它是天花板，而且免费。**
-3. **以为 Faithfulness 高就好** —— ❌ **context 是垃圾时，忠实地基于垃圾回答，Faithfulness 也是 100%**。
-4. **信 LLM-as-Judge 的绝对分数** —— **只有相对比较可信**。
-5. **只看总体指标** —— **必须按 query 类型分组**，才知道该修哪。
-6. **Faithfulness 的实现忘了"没提到的一律否"** —— LLM 会用自己的知识判断。
-
-### 📚 延伸阅读
-- [RAGAS](https://arxiv.org/abs/2309.15217) - **四个指标的定义**
-- [ARES](https://arxiv.org/abs/2311.09476) - 另一个 RAG 评估框架
-- [Judging LLM-as-a-Judge](https://arxiv.org/abs/2306.05685) - **偏差的系统性研究（第 19 章会详谈）**
+- 📄 **检索与长上下文的融合**：Self-Route（Li et al. 2024）在两者之间路由；检索头的研究（Wu et al. 2024, *Retrieval Head Mechanistically Explains Long-Context Factuality*）发现长上下文模型内部少数注意力头负责从上下文中检索信息，屏蔽它们会显著损害"大海捞针"类任务。❓ 随着上下文成本下降，外部检索会不会逐渐被模型内部的稀疏注意力替代？
+- ❓ **噪声的作用**：*The Power of Noise* 发现加入随机文档反而提高准确率，机制尚不清楚。可能与 attention sink、上下文长度带来的校准变化有关，有待验证。
+- ❓ **知识冲突**：当检索内容与模型参数知识冲突时，模型何时该相信哪一方？Xie et al. 2024 揭示了确认偏误，但如何训练出"按证据可信度权衡"的模型仍是开放问题。
+- ❓ **端到端优化**：检索器和生成器通常分开训练。如何以最终答案质量为目标联合优化（RAG 原论文做了端到端训练，但在大模型时代成本很高），以及如何用 RL 训练模型主动检索（Search-R1 等 2025 年的工作），是活跃方向。
+- 🧪 **实验设想（文字）**：在一个开放域 QA 数据集上，固定生成模型，对比四种上下文：① 只放金标段落 ② 金标 + 看起来相关但不含答案的高分段落 ③ 金标 + 随机段落 ④ 只放干扰段落，并改变金标段落在上下文中的位置。这能同时复现 Lost in the Middle 和 Power of Noise 的核心现象，并检验两者的交互。
 
 ---
 
 ## 📝 本章小结
 
-| 关键点 | 你必须能脱口而出 |
-|---|---|
-| **RAG vs 微调** | **微调教"怎么做"（能力/风格），RAG 教"知道什么"（事实）**；**互补不是二选一** |
-| **RAG vs 长上下文** | **成本差 200×** / **Lost in the Middle（U 形）** / TB 级语料 / 可溯源。**四条理由** |
-| **长上下文改变了 RAG** | chunk 更大、top-k 更多、**rerank 压力下降**；**矛盾从"检索准不准"转移到"塞进去多贵"** |
-| **★七环失败模式★** | 解析/分块/embedding/检索/重排/组装/生成 —— **面试考的是"你能定位到哪一环"** |
-| **★检索是天花板★** | **先测 Recall@k（免费），再调 prompt（第 7 环）** |
-| **RAG 不消除幻觉** | 只是**改变了来源**；**最有效的一招是强制引用**（逼模型真的去看 context） |
-| **★不检索也是选项★** | **不该检索时检索到的垃圾会把模型带偏**——"多检索无害"是**错的** |
-| **chunk 的矛盾** | 小 → 语义断/缺上下文；大 → **embedding 被<u>稀释</u>**（5 件事的平均，对哪件都不精确） |
-| **跳出二选一** | **Small-to-Big**（小块检索、大块返回）/ **Contextual Retrieval**（-35%/-49%/-67%）/ **Late Chunking**（零成本） |
-| **结构感知** | **最有效的 chunking 是"尊重文档本身的结构"**；markdown 标题 prepend = **免费版 Contextual Retrieval** |
-| **索引 vs 返回** | ⭐ **"索引一个<u>为检索优化</u>的表示，返回一个<u>为阅读优化</u>的表示"**（表格/图片/代码全适用） |
-| **Bi-encoder 的瓶颈** | ⭐ **压缩 doc 时 query 还没出现** → 只能压"平均表示" → **这是 rerank 存在的全部理由** |
-| **三者的本质** | **Bi = 先压缩后匹配；Cross = 边看边匹配；ColBERT = 瓶颈从 1024 维放宽到 N×1024 维** |
-| **非对称检索** | RAG 是"问题 → 段落"；**query 侧要加 instruction prefix**（忘了掉 3-5 点） |
-| **HNSW** | **多层图（像跳表）**：长边快速接近、短边精细定位；**`ef_search` 是召回↔延迟的运行时旋钮** |
-| **别过度设计** | **< 10 万条暴力搜索；< 500 万用 pgvector**；已用 ES 就直接加向量字段 |
-| **向量 vs BM25** | **正交**：向量抓语义，BM25 抓**精确符号**（型号/错误码/**否定词**）。**"不含糖"和"含糖"的 embedding 极近** |
-| **★RRF★** | $\sum_r \frac{1}{60+\text{rank}_r}$。**用 rank 不用 score，因为分数不可比、归一化易被离群值破坏** |
-| **k=60 的含义** | **平滑；k 大 = 更看重"共识"** —— 两个 ranker 都排第 5 > 一个 ranker 排第 1 |
-| **★相对 > 绝对★** | **第 4/5 次登场**：PPO Advantage → RLHF reward → min-p → **RRF** → **LLM-as-Judge** |
-| **通用架构** | ⭐ **宽召回(100) → 廉价粗排(RRF→20) → 昂贵精排(rerank→5)**。搜广推/MRL/投机解码全是这个 |
-| **融合不能创造** | **第一阶段漏掉的，后面永远找不回来** → **宽召回是原则** |
-| **rerank 要 batch** | **for 循环 = batch=1 = memory-bound**（第 12 章）→ batch 化快 5-10× |
-| **Lost in the Middle** | **最相关的放<u>开头和结尾</u>** —— 免费的几个点 |
-| **★检索结果放最后★** | 否则**毁掉 Prefix Caching**（第 12 章 Q7 的铁律在 RAG 上同样成立） |
-| **★多轮必须指代消解★** | "它的价格呢" 单独检索 = 垃圾；**且不会报错，只是默默变差** |
-| **HyDE** | **假想答案<u>内容错了没关系</u>，捕捉的是"答案该<u>长什么样</u>"** → 把非对称检索**变成**对称检索 |
-| **★路由★** | ⭐ **单一策略一定次优**；"总是 GraphRAG" 和 "总是向量检索" **一样错** |
-| **路由的兜底** | ⭐ **用 rerank 分数做阈值**（基于实际结果，比猜 query 可靠）+ 给模型"忽略 context"的许可 |
-| **GraphRAG** | **社区摘要 + map-reduce → 回答 top-k <u>永远</u>答不了的全局问题**；**极贵，靠路由启用** |
-| **Agentic RAG** | **把人工设计的流程变成模型自己的决策**；**必开 Prefix Caching（94% 命中）+ 独立子查询并行** |
-| **90% 的场景** | **好 chunking + 混合检索 + rerank + 改写就够了**。高级技术是**专用工具** |
-| **★幻觉归因★** | ⭐ **检索失败（修检索）vs 生成失败（修 prompt）** —— **不区分就只能瞎调** |
-| **RAGAS 的二分** | **Faithfulness + Answer Relevancy 测生成；Context Precision + Recall 测检索** |
-| **Faithfulness 的陷阱** | ⚠️ **context 是垃圾时，忠实地基于垃圾回答，Faithfulness 也是 100%** |
-| **只测一个** | **Recall@k** —— 天花板 + 免费 + 指向明确 |
-| **★分组归因★** | **"哪一类 query 挂了" 比 "总体分数" 有用一百倍** → 决定该加路由还是换方案 |
-| **线上监控** | ⭐ **"我不知道"的比例是最灵敏的先行指标**（免费、实时、直指检索健康度） |
+| 关键点 | 你必须能说清楚 | 性质 |
+|---|---|---|
+| RAG vs 长上下文 | 成本、有效利用率（Lost in the Middle、RULER）、规模、溯源；长上下文改变了 RAG 的形态 | 📄 + 🧮 |
+| RAG vs 微调 | 互补：事实交给检索，格式与能力交给微调 | 💭 + 📄 |
+| 七环失败模式 | 先定位环节；先测检索 | 💭 |
+| 幻觉来源 | 检索失败、生成失败、知识库本身错误；相关但错误的上下文最危险 | 📄 |
+| Chunking | 太大则一个向量概括多件事；Small-to-Big、Contextual Retrieval、Late Chunking；结构感知最划算 | 📄 + 💭 |
+| Bi-encoder | 压缩文档时还不知道 query；这是 rerank 的理由 | 💭 |
+| 非对称检索 | query 侧前缀按模型卡加 | 📄 |
+| HNSW | 多层图；`ef_search` 是运行时召回/延迟旋钮；图的内存对高维向量占比小 | 📄 + 🧮 |
+| 混合检索 | 向量抓语义，BM25 抓符号；BEIR 中 BM25 是强基线 | 📄 |
+| RRF | 只用排名；$k=60$；更看重共识 | 📄 + 🧮 |
+| 宽召回 | 后续阶段只能重排，不能找回漏掉的 | 💭 |
+| Rerank | cross-encoder 精排；批处理；摆放顺序；检索结果放 prompt 后部 | 📄 + 🧮 |
+| 改写与路由 | 多轮必须指代消解；HyDE 把非对称转成对称；"不检索"是选项 | 📄 + 💭 |
+| GraphRAG | 社区摘要 + map-reduce 回答全局问题；昂贵，按需路由 | 📄 |
+| RAGAS | 两个测生成、两个测检索；Faithfulness 高不代表答案对 | 📄 |
 
 ## ✅ 自测题
 
-1. "上下文都 100 万了，还要 RAG 干嘛？" —— 给出**四条**理由，并说清**长上下文<u>改变了</u> RAG 的什么**。
-2. 用户说"模型答不对" —— 你的**前三个动作**是什么？（提示：不是调 prompt）
-3. 解释"**embedding 被稀释**"。为什么它导致"chunk 大一点召回更全"是**错的**？
-4. **Small-to-Big / Contextual Retrieval / Late Chunking** 各解决了什么？为什么说 **Contextual Retrieval 的成本靠第 12 章的技术压下来**？
-5. 为什么 **RRF 用 rank 不用 score**？$k=60$ 意味着什么？举一个"min-max 归一化被离群值毁掉"的例子。
-6. 为什么 **bi-encoder 不如 cross-encoder**？用"信息瓶颈"解释，并说明 **ColBERT 在哪个位置**。
-7. 你的 rerank 延迟 300ms，怎么优化？（提示：**其中一招和第 12 章的 Roofline 直接相关**）
-8. **HyDE 的假想答案内容是错的，为什么还有效？** 什么时候它<u>不</u>值得用？
-9. "多检索总比不检索好" —— **这句话错在哪？**
-10. **Faithfulness = 100% 但答案完全错误** —— 这可能吗？说明什么？
-11. 你的 RAG 总体 Recall@10 = 80%。**下一步做什么？**（提示：不是"想办法提到 90%"）
-12. **综合题**：设计一个企业知识库 RAG（10 万份文档，含大量 PDF 表格；用户是客服；query 类型包括：产品参数查询、错误码查询、政策解释、"有多少个客户在用 X"）。**按优先级列出你的方案，并说明每个 query 类型走哪条路由。**
+1. "上下文都 100 万了，还要 RAG 吗？"给出论据和反论据，并说明长上下文如何改变了 RAG 的设计。
+2. 用户反馈"答得不对"，你的前三个排查动作是什么？
+3. 为什么 chunk 太大不好？Small-to-Big、Contextual Retrieval、Late Chunking 分别怎么解决这个问题？
+4. 为什么 RRF 用排名而不用分数？举一个 min-max 归一化被离群值破坏的例子，并解释 $k=60$ 的含义。
+5. 用信息瓶颈解释 bi-encoder、ColBERT、cross-encoder 的精度差异。
+6. rerank 延迟太高，列出优化手段，并说明其中哪一招与第 12 章的 Roofline 有关。
+7. HyDE 的假想答案内容是错的，为什么仍然有效？什么时候不值得用？
+8. "多检索总比不检索好"这句话对吗？结合 Shi et al. 2023 和 *The Power of Noise* 的发现回答。
+9. Faithfulness = 100% 但答案完全错误，可能吗？说明了什么？
+10. **设计题**：为客服团队设计一个企业知识库 RAG（10 万份文档，含大量 PDF 表格；query 包括产品参数、错误码、政策解释、"有多少客户在用 X"）。说明每类 query 走哪条路由，以及你的评测方案。
 
 ---
 
-> **下一章预告**：**第 17 章｜Function Calling 与工具调用**——训练怎么教会模型调工具、**stop token 的机制**（为什么模型"知道"该停下来）、Schema 设计、**并行调用**、错误恢复与重试、以及 **MCP**（Tools / Resources / Prompts 的**控制权归属**）。
->
-> 本章的 Q8（约束解码，第 14 章）和 Q6（路由）是它的直接前置：**约束解码保证"语法合法"，Function Calling 训练保证"语义合理"——两者互补，生产上都要。**
->
-> RAG 是"**让模型能<u>读</u>**"，Function Calling 是"**让模型能<u>做</u>**"——**它们合起来才是 Agent 的两只手。**
-
+> **下一章预告**：第 17 章｜Function Calling 与工具调用——模型怎么学会调用工具、为什么它知道何时停下、schema 设计、并行调用、错误恢复，以及 MCP 中 Tools / Resources / Prompts 的控制权划分。RAG 让模型能"读"，工具调用让模型能"做"。
