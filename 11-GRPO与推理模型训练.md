@@ -80,7 +80,7 @@ $$\mathbb{D}_{KL} = \frac{\pi_{ref}(o_{i,t}\mid\cdot)}{\pi_\theta(o_{i,t}\mid\cd
 
 令 $u = \pi_{ref}(a)/\pi_\theta(a)$， $a\sim\pi_\theta$：
 - $k_1 = -\log u$： $\mathbb{E}[k_1] = \text{KL}(\pi_\theta\thinspace \Vert \thinspace \pi_{ref})$，无偏，但单个样本可能为负，方差大。
-- $k_3 = (u - 1) - \log u$：因为 $\mathbb{E}_{a\sim\pi_\theta}[u] = 1$，所以 $\mathbb{E}[k_3] = \mathbb{E}[k_1]$，**同样无偏**；并且由 $\log u \le u - 1$，**每个样本都非负**，通常方差更小。
+- $k_3 = (u - 1) - \log u$：因为 $\mathbb{E}_ {a\sim\pi_\theta}[u] = 1$，所以 $\mathbb{E}[k_3] = \mathbb{E}[k_1]$，**同样无偏**；并且由 $\log u \le u - 1$，**每个样本都非负**，通常方差更小。
 - 📄 出处：Schulman 的博客 *Approximating KL Divergence*（2020）。
 - 💭 注意：把 $k_3$ 作为**损失项**求梯度，得到的梯度并不等于真正 KL 的梯度；2025 年有多篇工作分析了不同 KL 估计量在"作为奖励"和"作为损失"时的梯度性质。
 
@@ -134,7 +134,7 @@ $$\mathbb{E}_{a\sim\pi}\left[\nabla_\theta\log\pi_\theta(a\mid s)\,b(s)\right] =
 
 ### 🧮 组均值是 $V(q)$ 的蒙特卡洛估计
 
-在结果奖励的设定下，整段回答可以看作一个"动作"， $V_{\pi_{old}}(q) = \mathbb{E}_{o\sim\pi_{old}}[r(q,o)]$，组均值 $\bar r = \frac1G\sum_j r_j$ 是它的蒙特卡洛估计。LLM 的特殊之处在于**同一个问题可以低成本地重复采样**，所以可以直接用样本均值代替学习出来的价值函数。
+在结果奖励的设定下，整段回答可以看作一个"动作"， $V_{\pi_{old}}(q) = \mathbb{E}_ {o\sim\pi_{old}}[r(q,o)]$，组均值 $\bar r = \frac1G\sum_j r_j$ 是它的蒙特卡洛估计。LLM 的特殊之处在于**同一个问题可以低成本地重复采样**，所以可以直接用样本均值代替学习出来的价值函数。
 
 ### 🧮 但组均值作为基线是有偏的
 

@@ -119,7 +119,7 @@ PD 分离的做法：
 A：形状完全不同，所以最优 kernel 不同。
 
 - **Prefill**：Q 是 $[n, d]$，算 $[n, n]$ 的 attention 矩阵 → 是个标准 GEMM，**FlashAttention** 通过 tiling 把 $[n,n]$ 矩阵留在 SRAM 里、不落 HBM，收益巨大。
-- **Decode**：Q 只有 $[1, d]$，算 $[1, t]$ → 本质是 **GEMV**，attention 矩阵只有一行，根本不存在"$[n,n]$ 矩阵太大"的问题。FlashAttention 那套 tiling 意义不大。
+- **Decode**：Q 只有 $[1, d]$，算 $[1, t]$ → 本质是 **GEMV**，attention 矩阵只有一行，根本不存在" $[n,n]$ 矩阵太大"的问题。FlashAttention 那套 tiling 意义不大。
 
 Decode 的真瓶颈是**读 KV Cache**（ $t$ 越长读得越多）。所以有专门的 **FlashDecoding / FlashDecoding++**：把 KV 序列维度**切成多段并行**，再 reduce 合并——因为 batch=1 时 GPU 的 SM 大量闲置，切 KV 维度才能把并行度提上来。
 

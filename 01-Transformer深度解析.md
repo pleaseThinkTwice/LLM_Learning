@@ -164,7 +164,7 @@ A：📄 不一定。Kaplan et al. 2020 发现，在固定（非嵌入）参数�
 **5. Scaling Law** —— 📄 Kaplan 2020 和 Chinchilla（Hoffmann et al. 2022）的实验都基于 decoder-only Transformer。但这说明的是"研究资源集中在这条路线上"，不能推出 Enc-Dec 不能 scale（T5、UL2 都有大规模版本）。
 
 **6. 低秩论证** —— 💭 苏剑林《为什么现在的 LLM 都是 Decoder-only 的架构？》（科学空间，2023）：
-- 🧮 因果注意力矩阵 $A$ 是下三角矩阵，对角元 $A_{ii} = \text{softmax}(\cdot)_{ii} > 0$，所以 $\det A = \prod_i A_{ii} > 0$，**一定满秩**。
+- 🧮 因果注意力矩阵 $A$ 是下三角矩阵，对角元 $A_{ii} = \text{softmax}(\cdot)_ {ii} > 0$，所以 $\det A = \prod_i A_{ii} > 0$，**一定满秩**。
 - 双向注意力矩阵 $\text{softmax}(QK^T/\sqrt{d})$ 来自秩不超过 $d_k$ 的 $QK^T$，在 $n \gg d_k$ 时可能出现低秩瓶颈（另见 Q6 的 Bhojanapalli et al. 2020）。
 - ❓ 这是一个有启发性的解释，但"满秩是否等于更好"没有被严格验证。
 

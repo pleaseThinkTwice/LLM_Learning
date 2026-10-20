@@ -142,7 +142,7 @@ A：
 
 ### 🧮 Step 1：策略梯度
 
-目标 $J(\theta) = \mathbb{E}_{\tau\sim\pi_\theta}\left[\sum_t r_t\right]$。🧮 由 $\nabla_\theta\pi_\theta = \pi_\theta\nabla_\theta\log\pi_\theta$（log-derivative trick）：
+目标 $J(\theta) = \mathbb{E}_ {\tau\sim\pi_\theta}\left[\sum_t r_t\right]$。🧮 由 $\nabla_\theta\pi_\theta = \pi_\theta\nabla_\theta\log\pi_\theta$（log-derivative trick）：
 
 $$\nabla_\theta J = \mathbb{E}_{\tau\sim\pi_\theta}\left[\sum_t\nabla_\theta\log\pi_\theta(a_t\mid s_t)\,\hat A_t\right]$$
 
@@ -154,7 +154,7 @@ $$\nabla_\theta J = \mathbb{E}_{\tau\sim\pi_\theta}\left[\sum_t\nabla_\theta\log
 
 $$\rho_t(\theta) = \frac{\pi_\theta(a_t\mid s_t)}{\pi_{old}(a_t\mid s_t)}$$
 
-得到代理目标（surrogate） $L^{CPI}(\theta) = \mathbb{E}_t[\rho_t(\theta)\hat A_t]$。
+得到代理目标（surrogate） $L^{CPI}(\theta) = \mathbb{E}_ t[\rho_t(\theta)\hat A_t]$。
 🧮 在 $\theta = \theta_{old}$ 处， $\nabla L^{CPI} = \nabla J$。但离 $\theta_{old}$ 越远，代理目标越不可靠（这里还忽略了状态分布的变化）。
 
 📄 **TRPO**（Schulman et al. 2015）用 KL 散度的**硬约束** $\mathbb{E}[\text{KL}(\pi_{old}\thinspace \Vert \thinspace \pi_\theta)]\le\delta$ 来保证单调改进，需要共轭梯度和线搜索，实现复杂。
@@ -183,7 +183,7 @@ $\lambda=0$ 时是一步 TD（低方差、高偏差）， $\lambda=1$ 时是蒙�
 $$r_t = -\beta\log\frac{\pi_\theta(a_t\mid s_t)}{\pi_{ref}(a_t\mid s_t)} + \mathbb{1}[t=T]\cdot r_\phi(x, y)$$
 
 - 总损失： $\mathcal{L} = -L^{CLIP} + c_1\thinspace \mathcal{L}^{VF}$（可选熵正则；InstructGPT 式的 RLHF 一般不加熵奖励）。
-- 📄 **PPO-ptx**（InstructGPT）：在目标中加入预训练数据的对数似然 $\gamma\thinspace \mathbb{E}_{x\sim D_{pretrain}}[\log\pi_\theta(x)]$，缓解"对齐税"。
+- 📄 **PPO-ptx**（InstructGPT）：在目标中加入预训练数据的对数似然 $\gamma\thinspace \mathbb{E}_ {x\sim D_{pretrain}}[\log\pi_\theta(x)]$，缓解"对齐税"。
 
 ### 💻 伪代码
 
@@ -266,7 +266,7 @@ A：📄 DAPO（ByteDance Seed 2025）提出 **Clip-Higher**：把上界放宽�
 
 ### 🎯 一句话标答
 
-> RLHF 的目标是 $\max_\pi \mathbb{E}_{x, y\sim\pi}[r(x,y)] - \beta\thinspace \text{KL}(\pi(\cdot\mid x)\thinspace \Vert \thinspace \pi_{ref}(\cdot\mid x))$。🧮 它的最优解有闭式形式： $\pi^\ast (y\mid x) = \frac{1}{Z(x)}\pi_{ref}(y\mid x)\exp\big(r(x,y)/\beta\big)$。KL 项的作用是：让策略留在 RM 可信的区域、保持语言质量、减少遗忘。
+> RLHF 的目标是 $\max_\pi \mathbb{E}_ {x, y\sim\pi}[r(x,y)] - \beta\thinspace \text{KL}(\pi(\cdot\mid x)\thinspace \Vert \thinspace \pi_{ref}(\cdot\mid x))$。🧮 它的最优解有闭式形式： $\pi^\ast (y\mid x) = \frac{1}{Z(x)}\pi_{ref}(y\mid x)\exp\big(r(x,y)/\beta\big)$。KL 项的作用是：让策略留在 RM 可信的区域、保持语言质量、减少遗忘。
 
 ### 🧮 推导
 
@@ -294,7 +294,7 @@ A：🧮 $\text{KL}(\pi\thinspace \Vert \thinspace \pi_{ref})$ 的期望是在 $
 
 A：
 - **放在奖励里**（InstructGPT、Ziegler 2019）：每个 token 的奖励 $-\beta\log(\pi/\pi_{ref})$，通过价值函数和 GAE 传播，影响后续 token 的优势。
-- **放在损失里**（📄 GRPO, DeepSeekMath）：直接在损失中加 $\beta\thinspace \mathbb{D}_{KL}$，并使用无偏、非负的 $k_3$ 估计量 $\frac{\pi_{ref}}{\pi} - \log\frac{\pi_{ref}}{\pi} - 1$（→ 第 11 章）。
+- **放在损失里**（📄 GRPO, DeepSeekMath）：直接在损失中加 $\beta\thinspace \mathbb{D}_ {KL}$，并使用无偏、非负的 $k_3$ 估计量 $\frac{\pi_{ref}}{\pi} - \log\frac{\pi_{ref}}{\pi} - 1$（→ 第 11 章）。
 - 💭 两者在优化上不完全等价。📄 后续有研究分析了这些 KL 估计量的梯度性质，发现某些"放在损失里"的写法得到的梯度与真正的 KL 梯度并不一致。
 
 **Q：β 怎么设？**
@@ -418,7 +418,7 @@ AdamW（ $\beta_1=0.9, \beta_2=0.95, \epsilon=10^{-5}$）、weight decay 0.1、�
 ### 📄 Best-of-N 与拒绝采样微调
 
 - **Best-of-N**：采样 $N$ 个回答，用 RM 选最高分。📄 WebGPT（Nakano et al. 2021）发现，在他们的设置中，对 RM 做 best-of-64 的拒绝采样效果**优于** RL。
-- 🧮 Best-of-N 策略与原策略之间的 KL 有一个常用的解析式： $\text{KL}_{BoN} = \log N - \frac{N-1}{N}$。📄 Beirami et al. 2024 指出这其实是一个**上界**。这个关系让我们可以在"同样的 KL 预算"下比较 Best-of-N 和 RL（Q6 的 Gao et al. 正是这样做的）。
+- 🧮 Best-of-N 策略与原策略之间的 KL 有一个常用的解析式： $\text{KL}_ {BoN} = \log N - \frac{N-1}{N}$。📄 Beirami et al. 2024 指出这其实是一个**上界**。这个关系让我们可以在"同样的 KL 预算"下比较 Best-of-N 和 RL（Q6 的 Gao et al. 正是这样做的）。
 - **拒绝采样微调**：用 Best-of-N 选出的回答做 SFT。📄 LLaMA 2-Chat 在前几轮迭代中只用了拒绝采样微调，最后才加 PPO。
 
 ### 🔍 对比

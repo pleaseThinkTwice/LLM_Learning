@@ -49,13 +49,13 @@
 
 ### 📐 结构
 
-一层 MoE（以 top-$k$ 为例）：
+一层 MoE（以 $\text{top-}k$ 为例）：
 
 $$y = \sum_{i \in \mathcal{T}_k(x)} g_i(x)\, E_i(x), \qquad \mathcal{T}_k(x) = \text{TopK}\big(\{s_i(x)\}_{i=1}^N, k\big)$$
 
 - $E_i$：第 $i$ 个专家，通常就是一个 SwiGLU FFN（第 3 章）。
 - $s_i(x)$：路由打分，最常见是 $s = \text{softmax}(W_r x)$（ $W_r \in \mathbb{R}^{N \times d}$）。📄 DeepSeek-V3 改用 $s_i = \sigma(u^\top e_i)$（sigmoid），再在选中的专家上归一化。
-- $g_i$：门控权重，一般是选中专家的分数在 top-$k$ 内重新归一化。
+- $g_i$：门控权重，一般是选中专家的分数在 $\text{top-}k$ 内重新归一化。
 
 🧮 **参数与计算**：设专家中间维度为 $h$，SwiGLU 专家参数约 $3dh$。 $N$ 个专家的总参数约 $3Ndh$，每 token 计算约 $2 \times 3kdh$ FLOPs。总参数 / 激活参数 ≈ $N/k$（只看 FFN）。
 
@@ -92,18 +92,18 @@ $$y = \sum_{i \in \mathcal{T}_k(x)} g_i(x)\, E_i(x), \qquad \mathcal{T}_k(x) = \
 
 ### 🎯 一句话标答
 
-> 路由器是一个 $d \to N$ 的线性层，给每个 token 选 top-$k$ 个专家。离散的 top-$k$ 不可导，梯度只能通过**被选中专家的门控权重 $g_i$** 回传给路由器。为了让每个专家的计算量可预测，早期系统给每个专家设**容量** $C = \frac{T}{N}\times \text{cf}$（cf 为 capacity factor），超出容量的 token 被**丢弃**（直接走残差）。现代训练系统（MegaBlocks、DeepSeek-V3）用 dropless 实现或足够好的负载均衡来避免丢 token。
+> 路由器是一个 $d \to N$ 的线性层，给每个 token 选 $\text{top-}k$ 个专家。离散的 $\text{top-}k$ 不可导，梯度只能通过**被选中专家的门控权重 $g_i$** 回传给路由器。为了让每个专家的计算量可预测，早期系统给每个专家设**容量** $C = \frac{T}{N}\times \text{cf}$（cf 为 capacity factor），超出容量的 token 被**丢弃**（直接走残差）。现代训练系统（MegaBlocks、DeepSeek-V3）用 dropless 实现或足够好的负载均衡来避免丢 token。
 
 ### 📐 路由的梯度从哪里来
 
-🧮 输出 $y = \sum_{i \in \mathcal{T}_k} g_i E_i(x)$ 对路由参数的梯度只经过 $g_i$：
+🧮 输出 $y = \sum_{i \in \mathcal{T}_ k} g_i E_i(x)$ 对路由参数的梯度只经过 $g_i$：
 
 $$\frac{\partial \mathcal{L}}{\partial W_r} = \sum_{i \in \mathcal{T}_k} \frac{\partial \mathcal{L}}{\partial y}^{\!\top} E_i(x)\; \frac{\partial g_i}{\partial W_r}$$
 
 几个推论：
 1. **没被选中的专家拿不到梯度**，路由器也不知道"选它会怎样"。这就是 MoE 容易**路由坍缩**（少数专家越训越强、越来越常被选）的根源，需要 Q3 的负载均衡来对抗。
 2. 📄 Switch Transformer 用 $k=1$，并论证 top-1 也能工作；而 Shazeer 2017 曾认为 $k \ge 2$ 才能让路由器学到"比较"。💭 当前主流用细粒度专家 + $k=8$，这个争论已不那么重要。
-3. 如果在 top-$k$ 内重新做 softmax 归一化（Mixtral 的做法），只选一个专家时 $g=1$ 恒定，**路由器得不到梯度**；所以 top-1 的 Switch 不做重新归一化，直接用原始 softmax 概率作 $g$。
+3. 如果在 $\text{top-}k$ 内重新做 softmax 归一化（Mixtral 的做法），只选一个专家时 $g=1$ 恒定，**路由器得不到梯度**；所以 top-1 的 Switch 不做重新归一化，直接用原始 softmax 概率作 $g$。
 
 ### 📐 容量与 token dropping
 
@@ -246,7 +246,7 @@ A：不能。🧮 专家越小，单个专家的矩阵乘越"瘦"，GPU 利用�
 
 ### 📐 为什么 expert choice 与自回归冲突
 
-🧮 Expert choice 对每个专家在整个 batch 的 token 上做 top-$C$。训练时序列的所有 token 都在场，第 $t$ 个 token 是否被专家 $i$ 选中，取决于第 $t+1, t+2, \dots$ 个 token 的分数。推理时未来 token 还不存在，于是**训练和推理的路由规则不一致**。💭 这也是它更常用于 encoder 或多模态（📄 OLMoE 提到丢弃一些图像 token 危害较小）的原因。
+🧮 Expert choice 对每个专家在整个 batch 的 token 上做 $\text{top-}C$。训练时序列的所有 token 都在场，第 $t$ 个 token 是否被专家 $i$ 选中，取决于第 $t+1, t+2, \dots$ 个 token 的分数。推理时未来 token 还不存在，于是**训练和推理的路由规则不一致**。💭 这也是它更常用于 encoder 或多模态（📄 OLMoE 提到丢弃一些图像 token 危害较小）的原因。
 
 ### 📚 出处
 - Zhou et al. *Mixture-of-Experts with Expert Choice Routing*. NeurIPS 2022. arXiv:2202.09368
@@ -402,7 +402,7 @@ A：🧮 训练最优 ≠ 部署最优。MoE 显存占用由总参数决定，�
 
 ## ✅ 自测题
 
-1. 写出 top-$k$ MoE 层的公式，并说明路由器的梯度从哪里来。为什么 top-1 时不能在选中的专家内重新归一化？
+1. 写出 $\text{top-}k$ MoE 层的公式，并说明路由器的梯度从哪里来。为什么 top-1 时不能在选中的专家内重新归一化？
 2. 写出 Switch 负载均衡损失，解释为什么要乘 $N$，以及为什么梯度只通过 $P_i$。
 3. 解释 aux-loss-free 中偏置"只影响选择、不影响加权"的意义。DeepSeek-V3 §4.5.3 的对照实验说明了什么？
 4. 用组合数说明细粒度专家的动机。专家能无限切细吗？

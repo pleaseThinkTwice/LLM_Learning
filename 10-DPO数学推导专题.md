@@ -405,7 +405,7 @@ $$\mathcal{L}_{ORPO} = \mathcal{L}_{SFT}(x,y_w) + \lambda\cdot\left(-\log\sigma\
 | 闭式解 | $\pi^\ast \propto\pi_{ref}e^{r/\beta}$ | 🧮 |
 | 反解奖励 | $r = \beta\log\frac{\pi^\ast }{\pi_{ref}} + \beta\log Z(x)$ | 🧮 |
 | $Z(x)$ 抵消 | 只在同一 prompt 的两个回答之间 | 🧮 |
-| DPO 损失 | $-\log\sigma(\beta[\log\text{ratio}_w - \log\text{ratio}_l])$；序列对数概率求和 | 🧮 |
+| DPO 损失 | $-\log\sigma(\beta[\log\text{ratio}_ w - \log\text{ratio}_ l])$；序列对数概率求和 | 🧮 |
 | 梯度 | 按"隐式奖励排错程度"加权 | 🧮 + 📄 |
 | 等价类 | 只差 $f(x)$ 的奖励等价；策略参数化不损失表达能力 | 📄 |
 | 已知问题 | 似然位移、确定性偏好下 KL 失效、长度偏好、分布偏移、过优化 | 📄 |
