@@ -63,13 +63,17 @@ GRPO 的做法是：对每个问题采样一组回答，比如 16 或 64 个，�
 ### 🧮 目标函数（DeepSeekMath 原文形式）
 
 对问题 $q$，从 $\pi_{\theta_{old}}$ 采样 $\{o_1,\ldots,o_G\}$：
+
 $$\mathcal{J}_{GRPO}(\theta) = \mathbb{E}\left[\frac1G\sum_{i=1}^G\frac{1}{|o_i|}\sum_{t=1}^{|o_i|}\Big\{\min\big(\rho_{i,t}\hat A_{i,t},\ \text{clip}(\rho_{i,t},1-\epsilon,1+\epsilon)\hat A_{i,t}\big) - \beta\,\mathbb{D}_{KL}[\pi_\theta\,\|\,\pi_{ref}]\Big\}\right]$$
 
 - 概率比：$\rho_{i,t} = \dfrac{\pi_\theta(o_{i,t}\mid q, o_{i,<t})}{\pi_{\theta_{old}}(o_{i,t}\mid q, o_{i,<t})}$
 - **结果监督**下的优势（同一回答的所有 token 共享）：
+
 $$\hat A_{i,t} = \tilde r_i = \frac{r_i - \text{mean}(\mathbf r)}{\text{std}(\mathbf r)}$$
+
 - **过程监督**下：每个推理步骤有奖励，先对所有步骤奖励做组内归一化，然后 $\hat A_{i,t}$ 是 token $t$ **之后**所有步骤的归一化奖励之和。
 - KL 的 $k_3$ 估计量（按 token）：
+
 $$\mathbb{D}_{KL} = \frac{\pi_{ref}(o_{i,t}\mid\cdot)}{\pi_\theta(o_{i,t}\mid\cdot)} - \log\frac{\pi_{ref}(o_{i,t}\mid\cdot)}{\pi_\theta(o_{i,t}\mid\cdot)} - 1$$
 
 ### 🧮 为什么用 $k_3$？
@@ -123,7 +127,9 @@ A：📄 DeepSeekMath 中 GRPO 每个问题采样 64 个回答。DeepSeek-R1 的
 ### 🧮 基线不改变梯度期望
 
 对任何不依赖动作的 $b(s)$：
+
 $$\mathbb{E}_{a\sim\pi}\left[\nabla_\theta\log\pi_\theta(a\mid s)\,b(s)\right] = b(s)\sum_a\nabla_\theta\pi_\theta(a\mid s) = b(s)\,\nabla_\theta\sum_a\pi_\theta(a\mid s) = 0$$
+
 所以减去基线不改变期望，只改变方差。
 
 ### 🧮 组均值是 $V(q)$ 的蒙特卡洛估计
@@ -180,7 +186,9 @@ $\bar r$ 包含了 $r_i$ 本身，因此**基线依赖于动作 $o_i$**，严格
 ### GSPO：序列级的重要性比
 
 📄 **GSPO**（Zheng et al. 2025, Qwen 团队, *Group Sequence Policy Optimization*）认为 GRPO 的不稳定来自**重要性采样权重的误用**：奖励是对整个序列给的，却在每个 token 上计算概率比，这引入的高方差噪声会随回答长度累积，并被裁剪放大，可能导致模型崩溃。GSPO 用**序列似然**定义重要性比（并按长度做几何平均）：
+
 $$s_i(\theta) = \left(\frac{\pi_\theta(o_i\mid q)}{\pi_{\theta_{old}}(o_i\mid q)}\right)^{1/|o_i|}$$
+
 并在**序列级**做裁剪。📄 论文报告 GSPO 显著稳定了 **MoE 模型**的 RL 训练（不再需要"路由回放"等额外技巧），并用于 Qwen3 的训练。
 
 ### 🔍 小结

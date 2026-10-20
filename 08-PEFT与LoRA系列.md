@@ -91,12 +91,15 @@ A：📄 Lester et al. 2021 发现，随着模型规模增长（在 T5 上到约
 ### 🧮 推导与细节
 
 **前向**：
+
 $$h = W_0x + \frac{\alpha}{r}BAx$$
 
 **参数量**：每个矩阵从 $d_{out}d_{in}$ 降到 $r(d_{in}+d_{out})$。$d_{in}=d_{out}=4096$、$r=8$ 时，从约 1678 万降到 65536，约为 0.39%。
 
 **梯度**：令 $g = \partial\mathcal{L}/\partial h$（对单个样本），则
+
 $$\frac{\partial\mathcal{L}}{\partial B} = \frac{\alpha}{r}\,g\,(Ax)^T,\qquad \frac{\partial\mathcal{L}}{\partial A} = \frac{\alpha}{r}\,B^Tg\,x^T$$
+
 🧮 由于 $B=0$，第一步时 $\partial\mathcal{L}/\partial A = 0$，只有 $B$ 会被更新；之后两者才一起变化。
 
 **合并**：训练后 $W' = W_0 + \frac{\alpha}{r}BA$，推理与原模型结构完全一致。

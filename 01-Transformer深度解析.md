@@ -219,17 +219,23 @@ A：📄 2025 年 Google 发布了 **T5Gemma**：用预训练好的 decoder-only
 **Step 0**：输入 $X \in \mathbb{R}^{n \times d_{model}}$。
 
 **Step 1**：线性投影，$W^Q, W^K \in \mathbb{R}^{d_{model} \times d_k}$，$W^V \in \mathbb{R}^{d_{model} \times d_v}$：
+
 $$Q = XW^Q,\quad K = XW^K,\quad V = XW^V$$
 
 **Step 2**：分数矩阵
+
 $$S = \frac{QK^T}{\sqrt{d_k}} \in \mathbb{R}^{n \times n}$$
+
 $S_{ij}$ 表示位置 $i$ 对位置 $j$ 的关注程度（缩放原因见 Q4）。
 
 **Step 3**：按行 softmax
+
 $$A_{ij} = \frac{\exp(S_{ij})}{\sum_{k} \exp(S_{ik})}$$
+
 每一行之和为 1。
 
 **Step 4**：加权聚合
+
 $$\text{Output}_i = \sum_j A_{ij} V_j, \qquad \text{Output} = AV \in \mathbb{R}^{n \times d_v}$$
 
 🧮 **一个有用的改写**：$S = X W^Q (W^K)^T X^T / \sqrt{d_k}$。中间的 $W^Q (W^K)^T \in \mathbb{R}^{d_{model} \times d_{model}}$ 是一个**秩不超过 $d_k$ 的双线性形式**。这说明：
@@ -315,12 +321,17 @@ softmax 饱和时，雅可比矩阵 diag(p) − ppᵀ 接近零矩阵，梯度�
 ### 🧮 推导
 
 设 $q_i, k_i$ 相互独立，$\mathbb{E}[q_i]=\mathbb{E}[k_i]=0$，$\text{Var}(q_i)=\text{Var}(k_i)=1$：
+
 $$\mathbb{E}[q_ik_i] = 0, \qquad \text{Var}(q_ik_i) = \mathbb{E}[q_i^2]\mathbb{E}[k_i^2] = 1$$
+
 各分量独立，所以
+
 $$\text{Var}(q\cdot k) = \sum_{i=1}^{d_k}\text{Var}(q_ik_i) = d_k \quad\Rightarrow\quad \text{Var}\left(\frac{q\cdot k}{\sqrt{d_k}}\right) = 1$$
 
 🧮 **softmax 饱和为什么会导致梯度消失**：令 $p = \text{softmax}(s)$，则
+
 $$\frac{\partial p}{\partial s} = \text{diag}(p) - pp^T$$
+
 当 $p$ 接近 one-hot（$p_j \approx 1$，其余 $\approx 0$）时，这个矩阵的每一项都接近 0。
 
 📄 原论文第 3.2.1 节的脚注给出了上面的方差计算，正文用的是"We suspect that..."。
@@ -511,11 +522,15 @@ $$c_t^{KV} = W^{DKV} h_t \in \mathbb{R}^{d_c}, \qquad k_t^{C} = W^{UK} c_t^{KV},
 推理时只缓存 $c_t^{KV}$。
 
 **权重吸收**：对第 $i$ 个头，
+
 $$q_{t,i}^T k_{s,i}^{C} = (W_i^{Q} h_t)^T (W_i^{UK} c_s^{KV}) = h_t^T \underbrace{(W_i^{Q})^T W_i^{UK}}_{\text{可预先合并}} c_s^{KV}$$
+
 所以 query 可以直接投影到 $d_c$ 维的潜在空间，与缓存的 $c_s^{KV}$ 做点积，**不需要还原出完整的 K**。同理，$W^{UV}$ 可以吸收进输出投影 $W^O$。
 
 **RoPE 带来的问题**：RoPE 在 $q$ 和 $k$ 上分别乘以和位置有关的旋转矩阵 $R_t, R_s$：
+
 $$q_t^T R_t^T R_s k_s = h_t^T (W^Q)^T R_{s-t}\, W^{UK} c_s$$
+
 $R_{s-t}$ 夹在 $W^Q$ 和 $W^{UK}$ 中间，并且随相对位置变化，所以两个矩阵**无法预先合并**。
 
 **解耦 RoPE（Decoupled RoPE）**：额外引入一小段专门承载位置信息的向量：

@@ -68,17 +68,21 @@ A：📄 Zephyr-7B（HuggingFace, 2023）、Tülu 2（AI2, 2023）、Mixtral-Ins
 ### 🧮 Step 0：目标
 
 对每个 prompt $x$：
+
 $$\max_\pi\ \mathbb{E}_{y\sim\pi(\cdot\mid x)}\left[r(x,y)\right] - \beta\,\text{KL}\big(\pi(\cdot\mid x)\,\|\,\pi_{ref}(\cdot\mid x)\big)$$
 
 ### 🧮 Step 1：最优策略（拉格朗日乘子法）
 
 在约束 $\sum_y\pi(y\mid x)=1$ 下：
+
 $$\mathcal{L}(\pi,\lambda) = \sum_y\pi(y\mid x)\left[r(x,y) - \beta\log\frac{\pi(y\mid x)}{\pi_{ref}(y\mid x)}\right] - \lambda\left(\sum_y\pi(y\mid x) - 1\right)$$
 
 对每个 $y$ 求偏导（注意 $\frac{\partial}{\partial\pi}\pi\log\pi = \log\pi + 1$）：
+
 $$r(x,y) - \beta\log\frac{\pi(y\mid x)}{\pi_{ref}(y\mid x)} - \beta - \lambda = 0$$
 
 解得
+
 $$\pi^*(y\mid x) = \frac{1}{Z(x)}\,\pi_{ref}(y\mid x)\exp\!\left(\frac{r(x,y)}{\beta}\right),\qquad Z(x) = \sum_y\pi_{ref}(y\mid x)\exp\!\left(\frac{r(x,y)}{\beta}\right)$$
 
 🧮 目标关于 $\pi$ 是严格凹的（期望奖励是线性项，负 KL 是严格凹项），所以驻点就是全局最优。另一种不需要求导的推导见第 9 章 Q5。
@@ -133,6 +137,7 @@ def dpo_loss(pi_w, pi_l, ref_w, ref_l, beta=0.1):
 ### 🧮 梯度
 
 令 $\hat r_\theta(x,y) = \beta\log\frac{\pi_\theta(y\mid x)}{\pi_{ref}(y\mid x)}$。📄 DPO 损失的梯度为
+
 $$\nabla_\theta\mathcal{L}_{DPO} = -\beta\,\mathbb{E}\Big[\underbrace{\sigma\big(\hat r_\theta(x,y_l) - \hat r_\theta(x,y_w)\big)}_{\text{隐式奖励"排错"的程度}}\Big(\underbrace{\nabla_\theta\log\pi_\theta(y_w\mid x)}_{\text{提高 }y_w} - \underbrace{\nabla_\theta\log\pi_\theta(y_l\mid x)}_{\text{降低 }y_l}\Big)\Big]$$
 
 🧮 解读：
@@ -292,14 +297,19 @@ A：
 ### 🧮 IPO
 
 📄 Azar et al. 2024 提出一般框架 ΨPO，IPO 是取 Ψ 为恒等函数的特例。令
+
 $$h_\theta(x,y_w,y_l) = \log\frac{\pi_\theta(y_w\mid x)\,\pi_{ref}(y_l\mid x)}{\pi_\theta(y_l\mid x)\,\pi_{ref}(y_w\mid x)}$$
+
 $$\mathcal{L}_{IPO} = \mathbb{E}\left[\left(h_\theta(x,y_w,y_l) - \frac{1}{2\tau}\right)^2\right]$$
+
 🧮 平方损失把对数概率比之差拉向一个**有限**的目标 $\frac1{2\tau}$，而不是像 sigmoid 那样推向无穷，从而在确定性偏好下仍然保持正则化效果。$\tau$ 扮演 KL 系数的角色。
 
 ### 🧮 KTO
 
 📄 Ethayarajh et al., ICML 2024：基于 Kahneman–Tversky 的前景理论，只需要每条回答"可取 / 不可取"的二值标签。令 $r_\theta(x,y) = \log\frac{\pi_\theta(y\mid x)}{\pi_{ref}(y\mid x)}$，参考点 $z_0 = \text{KL}(\pi_\theta(\cdot\mid x)\,\|\,\pi_{ref}(\cdot\mid x))$（实践中用 batch 内不匹配的 $(x, y')$ 估计，并截断为非负，不回传梯度）：
+
 $$v(x,y) = \begin{cases}\lambda_D\,\sigma\big(\beta(r_\theta(x,y) - z_0)\big) & y\text{ 可取}\\[2pt] \lambda_U\,\sigma\big(\beta(z_0 - r_\theta(x,y))\big) & y\text{ 不可取}\end{cases},\qquad \mathcal{L}_{KTO} = \mathbb{E}\left[\lambda_y - v(x,y)\right]$$
+
 📄 论文报告在 1B–30B 规模上，KTO 只用二值反馈就能匹配或超过 DPO；$\lambda_D, \lambda_U$ 用于处理好坏样本数量不平衡。
 
 > ⚠️ 旧版把参考点 $z_0$ 写成"数据集平均的 reward"，不准确：它是对当前策略与参考模型之间 KL 的估计。
@@ -307,7 +317,9 @@ $$v(x,y) = \begin{cases}\lambda_D\,\sigma\big(\beta(r_\theta(x,y) - z_0)\big) & 
 ### 🧮 SimPO
 
 📄 Meng, Xia, Chen, NeurIPS 2024：
+
 $$\mathcal{L}_{SimPO} = -\mathbb{E}\left[\log\sigma\!\left(\frac{\beta}{|y_w|}\log\pi_\theta(y_w\mid x) - \frac{\beta}{|y_l|}\log\pi_\theta(y_l\mid x) - \gamma\right)\right]$$
+
 - 用**长度归一化的平均对数概率**作为隐式奖励，使训练时的奖励和**生成时的打分方式**（平均对数似然）一致。
 - **不需要参考模型**，节省显存和计算。
 - 目标间隔 $\gamma$ 要求好回答的奖励至少高出一个 margin。
@@ -316,7 +328,9 @@ $$\mathcal{L}_{SimPO} = -\mathbb{E}\left[\log\sigma\!\left(\frac{\beta}{|y_w|}\l
 ### 🧮 ORPO
 
 📄 Hong et al., EMNLP 2024：在 SFT 损失上加一个**几率比**项，一个阶段完成指令学习和偏好对齐，**不需要参考模型**：
+
 $$\mathcal{L}_{ORPO} = \mathcal{L}_{SFT}(x,y_w) + \lambda\cdot\left(-\log\sigma\!\left(\log\frac{\text{odds}_\theta(y_w\mid x)}{\text{odds}_\theta(y_l\mid x)}\right)\right),\qquad \text{odds}_\theta(y\mid x) = \frac{P_\theta(y\mid x)}{1 - P_\theta(y\mid x)}$$
+
 其中 $P_\theta(y\mid x)$ 是**按长度归一化**的似然 $\exp\left(\frac1{|y|}\sum_t\log\pi_\theta(y_t\mid x,y_{<t})\right)$。
 
 > ❌ 旧版的对比表把 ORPO 标为"需要参考模型"，错误。
