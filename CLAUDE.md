@@ -26,6 +26,7 @@
 ## 已知待办
 
 - 第 1–20 章已全部去掉"频率"打分列和"大厂偏好"小节（2026-10-19）。第 1–11 章是整章重写；第 12–20 章原本质量较好，只做了定点修正（核对数字、加标注、补"研究前沿"小节），其中仍可能有未标注的经验数字，后续阅读时发现就补 💭 或出处。
-- 几处引用只经过检索摘要核实、未读原文全文：DistServe 正式版数字（7.4× / 12.6×）、GSM1k 最高掉分（v1 为 13%，后续版本可能有调整）、Anthropic 多 Agent 文章的 90.2% / 15×。有条件时对照原文再核。
+- 2026-10-20 已在可访问 arXiv 的环境下对照原文核实：DistServe（v1 4.48×/10.2×，v3 7.4×/12.6×）、GSM1k（v4 最高掉 8%，v1 为 13%）、MT-Bench Table 2/3/5、EAGLE-2/3、MagicDec、RULER、Anthropic 多 Agent 与 Contextual Retrieval 博客、MCP Tools 规范、DeepSeek-V2 的 latent RMSNorm（§3.1.2）、Kimi K2 的 QK-Norm 表述、R1 的 Nature 卷页。
+- 环境说明：本仓库的云环境已放开 arxiv.org / export.arxiv.org / openreview.net。export API 有速率限制，批量请求会返回 "Rate exceeded"，可改为逐个抓 `arxiv.org/abs/<id>` 页面（间隔几秒），全文用 `arxiv.org/pdf/<id>` + `pdftotext`。
 - `00-全书知识地图.md` 尚未与修订后的各章逐条对齐。
-- 第 3 章已核对，但部分事实只经过二手来源验证（如 DeepSeek MLA latent 上的 RMSNorm 来自开源实现，而非论文原文），后续可再查原文。
+- 第 1–11 章重写时的部分引用仍只经过检索摘要核实，可按上面的方法逐章抽查。

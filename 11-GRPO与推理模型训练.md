@@ -54,7 +54,7 @@ GRPO 的做法是：对每个问题采样一组回答，比如 16 或 64 个，�
 
 ### 📚 出处
 - Shao et al. *DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models*. 2024. arXiv:2402.03300
-- DeepSeek-AI. *DeepSeek-R1*. 2025. arXiv:2501.12948；Nature 版本 2025-09
+- DeepSeek-AI. *DeepSeek-R1*. 2025. arXiv:2501.12948；Nature 版本：Guo et al., *DeepSeek-R1 incentivizes reasoning in LLMs through reinforcement learning*, Nature 645, 633–638 (2025)
 
 ---
 
@@ -295,7 +295,7 @@ A：📄 R1 论文用 R1 生成的约 80 万条数据**蒸馏**了 Qwen2.5 和 L
 A：Open-R1（HuggingFace）、TinyZero、SimpleRL-Zoo（Zeng et al. 2025，系统研究了不同 base 模型上的 zero-RL）、Open-Reasoner-Zero、DAPO 等。
 
 ### 📚 出处
-- DeepSeek-AI. *DeepSeek-R1*. arXiv:2501.12948；Guo et al. Nature (2025)
+- DeepSeek-AI. *DeepSeek-R1*. arXiv:2501.12948；Guo et al. Nature 645, 633–638 (2025)
 - DeepSeek-AI. *DeepSeek-V3 Technical Report*. arXiv:2412.19437
 - Zeng et al. *SimpleRL-Zoo*. 2025. arXiv:2503.18892
 
