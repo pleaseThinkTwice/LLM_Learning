@@ -37,7 +37,7 @@
 
 ### 🎯 一句话标答
 
-> MoE 把 Transformer 的 FFN 换成 $N$ 个并列的"专家"FFN 加一个路由器，每个 token 只送进其中 $k$ 个专家（$k \ll N$）。于是**总参数随 $N$ 增长，而每个 token 的计算量只随 $k$ 增长**。这是"条件计算"（conditional computation）思想的落地：📄 Shazeer et al. 2017 首次在 LSTM 语言模型上做到了 1000 倍以上的容量提升且计算效率损失很小；📄 GShard（2020）和 Switch Transformer（2021）把它搬进 Transformer。
+> MoE 把 Transformer 的 FFN 换成 $N$ 个并列的"专家"FFN 加一个路由器，每个 token 只送进其中 $k$ 个专家（ $k \ll N$）。于是**总参数随 $N$ 增长，而每个 token 的计算量只随 $k$ 增长**。这是"条件计算"（conditional computation）思想的落地：📄 Shazeer et al. 2017 首次在 LSTM 语言模型上做到了 1000 倍以上的容量提升且计算效率损失很小；📄 GShard（2020）和 Switch Transformer（2021）把它搬进 Transformer。
 
 ### 🗣️ 30 秒口语版
 
@@ -54,10 +54,10 @@
 $$y = \sum_{i \in \mathcal{T}_k(x)} g_i(x)\, E_i(x), \qquad \mathcal{T}_k(x) = \text{TopK}\big(\{s_i(x)\}_{i=1}^N, k\big)$$
 
 - $E_i$：第 $i$ 个专家，通常就是一个 SwiGLU FFN（第 3 章）。
-- $s_i(x)$：路由打分，最常见是 $s = \text{softmax}(W_r x)$（$W_r \in \mathbb{R}^{N \times d}$）。📄 DeepSeek-V3 改用 $s_i = \sigma(u^\top e_i)$（sigmoid），再在选中的专家上归一化。
+- $s_i(x)$：路由打分，最常见是 $s = \text{softmax}(W_r x)$（ $W_r \in \mathbb{R}^{N \times d}$）。📄 DeepSeek-V3 改用 $s_i = \sigma(u^\top e_i)$（sigmoid），再在选中的专家上归一化。
 - $g_i$：门控权重，一般是选中专家的分数在 top-$k$ 内重新归一化。
 
-🧮 **参数与计算**：设专家中间维度为 $h$，SwiGLU 专家参数约 $3dh$。$N$ 个专家的总参数约 $3Ndh$，每 token 计算约 $2 \times 3kdh$ FLOPs。总参数 / 激活参数 ≈ $N/k$（只看 FFN）。
+🧮 **参数与计算**：设专家中间维度为 $h$，SwiGLU 专家参数约 $3dh$。 $N$ 个专家的总参数约 $3Ndh$，每 token 计算约 $2 \times 3kdh$ FLOPs。总参数 / 激活参数 ≈ $N/k$（只看 FFN）。
 
 ### 📄 代表模型的配置
 
@@ -137,7 +137,7 @@ A：📄 DeepSeek-V3 从 V2 的 softmax 改为 sigmoid，并在选中专家上�
 
 ### 🎯 一句话标答
 
-> 负载不均有两个后果：**路由坍缩**（少数专家垄断，其余专家训不到）和**算力浪费**（EP 下最忙的卡决定整步时间）。经典解法是 📄 Switch 的辅助损失 $\alpha N \sum_i f_i P_i$（$\alpha=10^{-2}$）；📄 ST-MoE 加了 **router z-loss** 稳定训练；但辅助损失本身会产生"干扰梯度"、损害主任务，于是 📄 DeepSeek 提出 **aux-loss-free**：给每个专家加一个只用于选择、不参与加权的偏置，按负载在线调节。另一条线是 📄 Qwen 的发现：**平衡的统计范围**（micro-batch vs global-batch）比损失形式更关键。
+> 负载不均有两个后果：**路由坍缩**（少数专家垄断，其余专家训不到）和**算力浪费**（EP 下最忙的卡决定整步时间）。经典解法是 📄 Switch 的辅助损失 $\alpha N \sum_i f_i P_i$（ $\alpha=10^{-2}$）；📄 ST-MoE 加了 **router z-loss** 稳定训练；但辅助损失本身会产生"干扰梯度"、损害主任务，于是 📄 DeepSeek 提出 **aux-loss-free**：给每个专家加一个只用于选择、不参与加权的偏置，按负载在线调节。另一条线是 📄 Qwen 的发现：**平衡的统计范围**（micro-batch vs global-batch）比损失形式更关键。
 
 ### 📐 Switch 辅助损失
 
@@ -145,8 +145,8 @@ A：📄 DeepSeek-V3 从 V2 的 softmax 改为 sigmoid，并在选中专家上�
 
 $$\mathcal{L}_{\text{bal}} = \alpha \cdot N \cdot \sum_{i=1}^{N} f_i \cdot P_i, \qquad f_i = \frac{1}{T}\sum_{x\in\mathcal{B}} \mathbb{1}\{\arg\max p(x) = i\}, \qquad P_i = \frac{1}{T}\sum_{x\in\mathcal{B}} p_i(x)$$
 
-- $f_i$：实际分到专家 $i$ 的 token 比例（**不可导**）；$P_i$：路由器给专家 $i$ 的平均概率（**可导**）。梯度只通过 $P_i$。
-- 乘以 $N$ 是为了让损失在均匀分布时恒为 $\alpha$（$\sum_i \frac1N\cdot\frac1N = \frac1N$），与专家数无关。
+- $f_i$：实际分到专家 $i$ 的 token 比例（**不可导**）； $P_i$：路由器给专家 $i$ 的平均概率（**可导**）。梯度只通过 $P_i$。
+- 乘以 $N$ 是为了让损失在均匀分布时恒为 $\alpha$（ $\sum_i \frac1N\cdot\frac1N = \frac1N$），与专家数无关。
 - 📄 论文全程用 $\alpha = 10^{-2}$，并称它"足够大以保证均衡，又足够小不至于压过主损失"。
 
 🧮 **为什么它鼓励均匀**：若把 $f$ 近似为 $P$，则 $\sum_i P_i^2 \ge \frac{1}{N}$（Cauchy–Schwarz），等号当且仅当 $P_i = 1/N$。实际中 $f$ 被当作常数，梯度 $\partial \mathcal{L}/\partial P_i \propto f_i$：**越忙的专家，路由概率被压得越狠**。
@@ -167,7 +167,7 @@ $$g'_{i,t} = \begin{cases} s_{i,t}, & s_{i,t} + b_i \in \text{TopK}\big(\{s_{j,t
 
 - 偏置 $b_i$ **只影响"选谁"，不影响加权**（加权仍用原始 $s_{i,t}$），所以不产生任何梯度干扰。
 - 每步结束后，**过载的专家 $b_i \mathrel{-}= \gamma$，欠载的 $b_i \mathrel{+}= \gamma$**。📄 DeepSeek-V3 在前 14.3T token 用 $\gamma = 0.001$，最后 500B token 设为 0。
-- 📄 V3 仍保留一个极小的**序列级**辅助损失（$\alpha = 0.0001$），"只是为了避免单条序列内的极端不均衡"。
+- 📄 V3 仍保留一个极小的**序列级**辅助损失（ $\alpha = 0.0001$），"只是为了避免单条序列内的极端不均衡"。
 
 ### 📐 关键洞察：平衡的"范围"
 
@@ -200,13 +200,13 @@ A：📄 OLMoE（§4.1.6）的消融中，不用负载均衡损失时，第一�
 
 ### 🎯 一句话标答
 
-> 📄 DeepSeekMoE 提出两条改动：**细粒度切分**（把 $N$ 个专家各切成 $m$ 份，变成 $mN$ 个小专家、激活 $mK$ 个，计算量不变但组合方式指数级增多）和**共享专家**（$K_s$ 个专家对所有 token 恒定激活，承担通用知识，减少路由专家之间的冗余）。细粒度已成为共识（Qwen3、OLMoE、Kimi K2 都用）；共享专家则有争议：DeepSeek、Kimi K2 保留，📄 OLMoE 的消融认为无益，📄 Qwen3 去掉了。
+> 📄 DeepSeekMoE 提出两条改动：**细粒度切分**（把 $N$ 个专家各切成 $m$ 份，变成 $mN$ 个小专家、激活 $mK$ 个，计算量不变但组合方式指数级增多）和**共享专家**（ $K_s$ 个专家对所有 token 恒定激活，承担通用知识，减少路由专家之间的冗余）。细粒度已成为共识（Qwen3、OLMoE、Kimi K2 都用）；共享专家则有争议：DeepSeek、Kimi K2 保留，📄 OLMoE 的消融认为无益，📄 Qwen3 去掉了。
 
 ### 📐 细粒度为什么有用：组合数
 
 🧮 在激活计算量相同的前提下：
-- 16 个专家选 2：$\binom{16}{2} = 120$ 种组合；
-- 把每个专家切成 4 份，64 个选 8：$\binom{64}{8} \approx 4.4\times 10^9$ 种组合。
+- 16 个专家选 2： $\binom{16}{2} = 120$ 种组合；
+- 把每个专家切成 4 份，64 个选 8： $\binom{64}{8} \approx 4.4\times 10^9$ 种组合。
 
 💭 组合越多，每个 token 越能"拼出"恰好需要的知识，专家也越容易专精。这是直觉，正式的证据来自 Q6 的粒度 scaling law。
 
@@ -390,8 +390,8 @@ A：🧮 训练最优 ≠ 部署最优。MoE 显存占用由总参数决定，�
 | MoE 的本质 | 总参数随 $N$ 增长，计算随 $k$ 增长；条件计算 | 📄 + 🧮 |
 | 路由梯度 | 只经过被选中专家的 $g_i$；未选中的专家无梯度 → 坍缩风险 | 🧮 |
 | 容量 | $C = \frac{T}{N}\times\text{cf}$；超出的 token 走残差；dropless（MegaBlocks） | 📄 |
-| Switch 平衡损失 | $\alpha N\sum f_iP_i$，$\alpha=10^{-2}$；梯度只经 $P_i$ | 📄 + 🧮 |
-| Router z-loss | $(\log\sum e^{x})^2$，$c_z=10^{-3}$，稳定且不伤质量 | 📄 |
+| Switch 平衡损失 | $\alpha N\sum f_iP_i$， $\alpha=10^{-2}$；梯度只经 $P_i$ | 📄 + 🧮 |
+| Router z-loss | $(\log\sum e^{x})^2$， $c_z=10^{-3}$，稳定且不伤质量 | 📄 |
 | Aux-loss-free | 偏置只管选择不管加权；按负载 $\pm\gamma$；V3 用 $\gamma=0.001$ | 📄 |
 | 平衡的范围 | batch/global-batch 优于序列级；它是 aux-loss-free 优势的主要来源 | 📄 |
 | 细粒度 | 组合数指数增长；粒度 scaling law 支持小专家 | 📄 + 🧮 |

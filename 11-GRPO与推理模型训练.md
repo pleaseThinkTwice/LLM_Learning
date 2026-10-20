@@ -47,7 +47,7 @@ GRPO 的做法是：对每个问题采样一组回答，比如 16 或 64 个，�
 | 基线 | 价值模型 $V_\phi(s_t)$，每个 token 一个 | 同一问题的组内平均奖励，每个回答一个 |
 | 优势 | GAE，按 token | $(r_i - \bar r)/\sigma_r$，按回答共享 |
 | 模型 | 策略、价值、参考、RM | 策略、参考（+ RM 或规则） |
-| KL | 通常放在每 token 奖励里 | 放在损失里，$k_3$ 估计量 |
+| KL | 通常放在每 token 奖励里 | 放在损失里， $k_3$ 估计量 |
 | 采样 | 每个 prompt 通常 1 个回答 | 每个 prompt $G$ 个回答 |
 
 > ❌ 旧版写"Kimi-K0、Qwen-QwQ、OpenAI o1 据传都用了类似方法"。"Kimi-K0"并不存在（Kimi 的推理模型是 k1.5，使用的是另一种策略优化方法）；o1 的训练方法没有公开。已删除。
@@ -62,11 +62,11 @@ GRPO 的做法是：对每个问题采样一组回答，比如 16 或 64 个，�
 
 ### 🧮 目标函数（DeepSeekMath 原文形式）
 
-对问题 $q$，从 $\pi_{\theta_{old}}$ 采样 $\{o_1,\ldots,o_G\}$：
+对问题 $q$，从 $\pi_{\theta_{old}}$ 采样 $\lbrace o_1,\ldots,o_G\rbrace$：
 
 $$\mathcal{J}_{GRPO}(\theta) = \mathbb{E}\left[\frac1G\sum_{i=1}^G\frac{1}{|o_i|}\sum_{t=1}^{|o_i|}\Big\{\min\big(\rho_{i,t}\hat A_{i,t},\ \text{clip}(\rho_{i,t},1-\epsilon,1+\epsilon)\hat A_{i,t}\big) - \beta\,\mathbb{D}_{KL}[\pi_\theta\,\|\,\pi_{ref}]\Big\}\right]$$
 
-- 概率比：$\rho_{i,t} = \dfrac{\pi_\theta(o_{i,t}\mid q, o_{i,<t})}{\pi_{\theta_{old}}(o_{i,t}\mid q, o_{i,<t})}$
+- 概率比： $\rho_{i,t} = \dfrac{\pi_\theta(o_{i,t}\mid q, o_{i,\lt t})}{\pi_{\theta_{old}}(o_{i,t}\mid q, o_{i,\lt t})}$
 - **结果监督**下的优势（同一回答的所有 token 共享）：
 
 $$\hat A_{i,t} = \tilde r_i = \frac{r_i - \text{mean}(\mathbf r)}{\text{std}(\mathbf r)}$$
@@ -78,8 +78,8 @@ $$\mathbb{D}_{KL} = \frac{\pi_{ref}(o_{i,t}\mid\cdot)}{\pi_\theta(o_{i,t}\mid\cd
 
 ### 🧮 为什么用 $k_3$？
 
-令 $u = \pi_{ref}(a)/\pi_\theta(a)$，$a\sim\pi_\theta$：
-- $k_1 = -\log u$：$\mathbb{E}[k_1] = \text{KL}(\pi_\theta\,\|\,\pi_{ref})$，无偏，但单个样本可能为负，方差大。
+令 $u = \pi_{ref}(a)/\pi_\theta(a)$， $a\sim\pi_\theta$：
+- $k_1 = -\log u$： $\mathbb{E}[k_1] = \text{KL}(\pi_\theta\thinspace \Vert \thinspace \pi_{ref})$，无偏，但单个样本可能为负，方差大。
 - $k_3 = (u - 1) - \log u$：因为 $\mathbb{E}_{a\sim\pi_\theta}[u] = 1$，所以 $\mathbb{E}[k_3] = \mathbb{E}[k_1]$，**同样无偏**；并且由 $\log u \le u - 1$，**每个样本都非负**，通常方差更小。
 - 📄 出处：Schulman 的博客 *Approximating KL Divergence*（2020）。
 - 💭 注意：把 $k_3$ 作为**损失项**求梯度，得到的梯度并不等于真正 KL 的梯度；2025 年有多篇工作分析了不同 KL 估计量在"作为奖励"和"作为损失"时的梯度性质。
@@ -114,7 +114,7 @@ for _ in range(num_updates):
 
 A：🧮 优势全为 0（分母加了 $\epsilon$），这一组**不产生任何策略梯度**，只剩 KL 项。训练后期大量题目要么全对要么全错，有效 batch 会显著缩小。📄 DAPO 的"动态采样"就是针对这一点：过采样并丢弃这类组，保持每个 batch 中有梯度的样本数量（Q4）。
 
-**Q：$G$ 取多少？**
+**Q： $G$ 取多少？**
 
 A：📄 DeepSeekMath 中 GRPO 每个问题采样 64 个回答。DeepSeek-R1 的具体超参数见其 Nature 版本的补充材料。💭 $G$ 越大，基线越准，但相同算力下能覆盖的问题数越少。
 
@@ -134,7 +134,7 @@ $$\mathbb{E}_{a\sim\pi}\left[\nabla_\theta\log\pi_\theta(a\mid s)\,b(s)\right] =
 
 ### 🧮 组均值是 $V(q)$ 的蒙特卡洛估计
 
-在结果奖励的设定下，整段回答可以看作一个"动作"，$V_{\pi_{old}}(q) = \mathbb{E}_{o\sim\pi_{old}}[r(q,o)]$，组均值 $\bar r = \frac1G\sum_j r_j$ 是它的蒙特卡洛估计。LLM 的特殊之处在于**同一个问题可以低成本地重复采样**，所以可以直接用样本均值代替学习出来的价值函数。
+在结果奖励的设定下，整段回答可以看作一个"动作"， $V_{\pi_{old}}(q) = \mathbb{E}_{o\sim\pi_{old}}[r(q,o)]$，组均值 $\bar r = \frac1G\sum_j r_j$ 是它的蒙特卡洛估计。LLM 的特殊之处在于**同一个问题可以低成本地重复采样**，所以可以直接用样本均值代替学习出来的价值函数。
 
 ### 🧮 但组均值作为基线是有偏的
 
@@ -343,7 +343,7 @@ A：Open-R1（HuggingFace）、TinyZero、SimpleRL-Zoo（Zeng et al. 2025，系�
 
 ### 📄 观点一：RLVR 主要提高采样效率，没有扩展能力边界
 
-📄 **Yue et al., NeurIPS 2025（oral）**（*Does Reinforcement Learning Really Incentivize Reasoning Capacity in LLMs Beyond the Base Model?*）：用 **pass@k**（$k$ 次采样中至少有一次正确的比例）衡量"能力边界"：
+📄 **Yue et al., NeurIPS 2025（oral）**（*Does Reinforcement Learning Really Incentivize Reasoning Capacity in LLMs Beyond the Base Model?*）：用 **pass@k**（ $k$ 次采样中至少有一次正确的比例）衡量"能力边界"：
 - 在 $k$ 较小时（如 pass@1），RL 模型明显优于 base 模型；
 - 但在 $k$ 很大时（如 pass@256），**base 模型反而追上甚至超过** RL 模型；
 - RL 模型的正确推理路径**已经存在于 base 模型的采样分布中**；随着 RLVR 训练，能力边界往往**变窄**。
@@ -405,7 +405,7 @@ A：Open-R1（HuggingFace）、TinyZero、SimpleRL-Zoo（Zeng et al. 2025，系�
 
 1. 用 TRL 或 veRL 在 Qwen2.5-0.5B/1.5B 上，以 GSM8K 为数据、规则奖励训练 GRPO，记录准确率、回答长度、策略熵的变化。
 2. 对比"回答内平均"和"token 级平均"（DAPO / Dr. GRPO）两种损失聚合方式，观察错误回答的长度变化。
-3. 在训练前后分别测量 pass@1 和 pass@k（$k$ 从 1 到 256），复现 Yue et al. 的曲线交叉现象。
+3. 在训练前后分别测量 pass@1 和 pass@k（ $k$ 从 1 到 256），复现 Yue et al. 的曲线交叉现象。
 4. 换成随机奖励，分别在 Qwen 和 Llama 系列的小模型上训练，检验 Spurious Rewards 的模型依赖性。
 
 ### 📚 出处
@@ -419,7 +419,7 @@ A：Open-R1（HuggingFace）、TinyZero、SimpleRL-Zoo（Zeng et al. 2025，系�
 
 | 关键点 | 你必须能脱口而出 | 性质 |
 |---|---|---|
-| GRPO | 组内归一化优势、按回答共享；无 critic；KL 在损失中（$k_3$） | 🧮 + 📄 |
+| GRPO | 组内归一化优势、按回答共享；无 critic；KL 在损失中（ $k_3$） | 🧮 + 📄 |
 | $k_3$ | $(u-1)-\log u$，无偏且非负 | 🧮 |
 | 组基线 | 是 $V(q)$ 的 MC 估计，但含自身样本有偏；留一法无偏（RLOO） | 🧮 + 📄 |
 | GRPO 的偏差 | 长度归一化 → 错误回答变长；标准差归一化 → 难度偏差 | 🧮 + 📄 |

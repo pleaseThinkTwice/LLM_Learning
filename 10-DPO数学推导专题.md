@@ -63,7 +63,7 @@ A：📄 Zephyr-7B（HuggingFace, 2023）、Tülu 2（AI2, 2023）、Mixtral-Ins
 
 ### 🎯 一句话标答
 
-> 四步：①KL 正则 RLHF 的最优策略 $\pi^*\propto\pi_{ref}e^{r/\beta}$；②反解出 $r = \beta\log\frac{\pi^*}{\pi_{ref}} + \beta\log Z(x)$；③代入 Bradley–Terry，$\beta\log Z(x)$ 在差值中抵消；④把 $\pi^*$ 换成 $\pi_\theta$，对偏好数据做最大似然。
+> 四步：①KL 正则 RLHF 的最优策略 $\pi^\ast \propto\pi_{ref}e^{r/\beta}$；②反解出 $r = \beta\log\frac{\pi^\ast }{\pi_{ref}} + \beta\log Z(x)$；③代入 Bradley–Terry， $\beta\log Z(x)$ 在差值中抵消；④把 $\pi^\ast$ 换成 $\pi_\theta$，对偏好数据做最大似然。
 
 ### 🧮 Step 0：目标
 
@@ -95,9 +95,9 @@ $$\boxed{r(x,y) = \beta\log\frac{\pi^*(y\mid x)}{\pi_{ref}(y\mid x)} + \beta\log
 
 $$P(y_w\succ y_l\mid x) = \sigma\big(r(x,y_w) - r(x,y_l)\big) = \sigma\!\left(\beta\log\frac{\pi^*(y_w\mid x)}{\pi_{ref}(y_w\mid x)} - \beta\log\frac{\pi^*(y_l\mid x)}{\pi_{ref}(y_l\mid x)}\right)$$
 
-$\beta\log Z(x)$ 只依赖 $x$，在差值中**抵消**。这一点至关重要：$Z(x)$ 需要对所有可能的回答求和，无法计算。
+$\beta\log Z(x)$ 只依赖 $x$，在差值中**抵消**。这一点至关重要： $Z(x)$ 需要对所有可能的回答求和，无法计算。
 
-📄 论文还推广到了 Plackett–Luce 模型（$K$ 个回答的完整排序），$Z(x)$ 同样会抵消。
+📄 论文还推广到了 Plackett–Luce 模型（ $K$ 个回答的完整排序）， $Z(x)$ 同样会抵消。
 
 ### 🧮 Step 4：DPO 损失
 
@@ -122,7 +122,7 @@ def dpo_loss(pi_w, pi_l, ref_w, ref_l, beta=0.1):
     return loss, reward_w, reward_l
 ```
 
-**要点**：$\log\pi(y\mid x)$ 是回答部分所有 token 对数概率的**和**，prompt 部分不计入。参考模型的对数概率可以预先计算并缓存。
+**要点**： $\log\pi(y\mid x)$ 是回答部分所有 token 对数概率的**和**，prompt 部分不计入。参考模型的对数概率可以预先计算并缓存。
 
 ### ⚠️ 常见陷阱
 
@@ -146,10 +146,10 @@ $$\nabla_\theta\mathcal{L}_{DPO} = -\beta\,\mathbb{E}\Big[\underbrace{\sigma\big
 
 ### 🧮 β 的两层作用
 
-1. **KL 强度**：来自 RLHF 目标的 KL 系数。$\beta$ 越大，最优策略越接近 $\pi_{ref}$。
-2. **温度**：$\beta$ 缩放对数概率比，决定 sigmoid 在多大的差距时饱和。
+1. **KL 强度**：来自 RLHF 目标的 KL 系数。 $\beta$ 越大，最优策略越接近 $\pi_{ref}$。
+2. **温度**： $\beta$ 缩放对数概率比，决定 sigmoid 在多大的差距时饱和。
 
-🧮 由于 $\nabla\mathcal{L}$ 中有一个 $\beta$ 因子和 sigmoid 内的 $\beta$，$\beta$ 与学习率之间存在耦合：改变 $\beta$ 时，通常也需要重新调学习率。
+🧮 由于 $\nabla\mathcal{L}$ 中有一个 $\beta$ 因子和 sigmoid 内的 $\beta$， $\beta$ 与学习率之间存在耦合：改变 $\beta$ 时，通常也需要重新调学习率。
 
 ### 🔥 高频追问
 
@@ -197,7 +197,7 @@ A：DPO 没有可被利用的显式 RM，但它仍然会利用**偏好数据中�
 
 ### 问题 1：被选中回答的概率也在下降
 
-📄 训练过程中常见的现象是：$\log\pi(y_w)$ 和 $\log\pi(y_l)$ **同时下降**，只是 $y_l$ 下降得更多，因此损失仍在下降。概率质量被转移到了**既不是 $y_w$ 也不是 $y_l$** 的其他回答上。
+📄 训练过程中常见的现象是： $\log\pi(y_w)$ 和 $\log\pi(y_l)$ **同时下降**，只是 $y_l$ 下降得更多，因此损失仍在下降。概率质量被转移到了**既不是 $y_w$ 也不是 $y_l$** 的其他回答上。
 
 - 📄 Pal et al. 2024（*Smaug: Fixing Failure Modes of Preference Optimisation with DPO-Positive*）：当 $y_w$ 和 $y_l$ 只有少数 token 不同（编辑距离小）时，DPO 会降低 $y_w$ 的概率；提出 **DPOP**，加入惩罚项防止 $y_w$ 的概率低于参考模型。
 - 📄 Razin et al., ICLR 2025（*Unintentional Unalignment: Likelihood Displacement in Direct Preference Optimization*）：把这种现象称为**似然位移**，发现它可能把概率转移到语义相反的回答上（例如本来应该拒绝的有害请求被接受）；用隐藏表示的相似度（CHES 分数）可以识别容易导致位移的偏好对。
@@ -260,9 +260,9 @@ A：不需要。参考模型就是**关闭 adapter 后的 base 模型**。TRL �
 | 来源 | 配置 |
 |---|---|
 | 📄 DPO 原论文 | $\beta=0.1$，学习率 $10^{-6}$，batch 64，RMSprop，150 步 warmup |
-| 📄 Zephyr-7B | 在 UltraFeedback（约 6.4 万条 prompt，每条取最高分和一个随机的低分回答组成偏好对）上训练，$\beta=0.1$，学习率 $5\times10^{-7}$ |
-| 📄 Tülu 2 | UltraFeedback，$\beta=0.1$，学习率 $5\times10^{-7}$，3 个 epoch |
-| 📄 LLaMA 3 | 学习率 $10^{-5}$、$\beta=0.1$；屏蔽格式 token；加入系数 0.2 的 NLL 项；多轮迭代，每轮使用上一轮最好的模型生成新数据 |
+| 📄 Zephyr-7B | 在 UltraFeedback（约 6.4 万条 prompt，每条取最高分和一个随机的低分回答组成偏好对）上训练， $\beta=0.1$，学习率 $5\times10^{-7}$ |
+| 📄 Tülu 2 | UltraFeedback， $\beta=0.1$，学习率 $5\times10^{-7}$，3 个 epoch |
+| 📄 LLaMA 3 | 学习率 $10^{-5}$、 $\beta=0.1$；屏蔽格式 token；加入系数 0.2 的 NLL 项；多轮迭代，每轮使用上一轮最好的模型生成新数据 |
 
 > ❌ 旧版的"学习率不要超过 1e-6""3 epoch 是上限""数据甜区 20K–100K""KL 不超过 5–10"等都没有出处，已替换为上表。
 
@@ -271,9 +271,9 @@ A：不需要。参考模型就是**关闭 adapter 后的 base 模型**。TRL �
 | 指标 | 健康的趋势 | 警惕 |
 |---|---|---|
 | DPO loss | 下降 | 很快降到接近 0（可能过拟合 / 确定性偏好问题） |
-| 偏好准确率（$\hat r_w > \hat r_l$ 的比例） | 上升 | — |
+| 偏好准确率（ $\hat r_w > \hat r_l$ 的比例） | 上升 | — |
 | margin $\hat r_w - \hat r_l$ | 上升 | — |
-| $\hat r_w$ 和 $\hat r_l$ 各自的值 | 理想情况是 $\hat r_w$ 上升、$\hat r_l$ 下降 | **两者同时大幅下降**：似然位移（Q5） |
+| $\hat r_w$ 和 $\hat r_l$ 各自的值 | 理想情况是 $\hat r_w$ 上升、 $\hat r_l$ 下降 | **两者同时大幅下降**：似然位移（Q5） |
 | 回答长度 | 变化不大 | 持续增长：长度偏好 |
 | 下游评测（AlpacaEval LC、MT-Bench、IFEval 等） | 提升 | 训练指标变好但下游变差：过优化 |
 
@@ -302,15 +302,15 @@ $$h_\theta(x,y_w,y_l) = \log\frac{\pi_\theta(y_w\mid x)\,\pi_{ref}(y_l\mid x)}{\
 
 $$\mathcal{L}_{IPO} = \mathbb{E}\left[\left(h_\theta(x,y_w,y_l) - \frac{1}{2\tau}\right)^2\right]$$
 
-🧮 平方损失把对数概率比之差拉向一个**有限**的目标 $\frac1{2\tau}$，而不是像 sigmoid 那样推向无穷，从而在确定性偏好下仍然保持正则化效果。$\tau$ 扮演 KL 系数的角色。
+🧮 平方损失把对数概率比之差拉向一个**有限**的目标 $\frac1{2\tau}$，而不是像 sigmoid 那样推向无穷，从而在确定性偏好下仍然保持正则化效果。 $\tau$ 扮演 KL 系数的角色。
 
 ### 🧮 KTO
 
-📄 Ethayarajh et al., ICML 2024：基于 Kahneman–Tversky 的前景理论，只需要每条回答"可取 / 不可取"的二值标签。令 $r_\theta(x,y) = \log\frac{\pi_\theta(y\mid x)}{\pi_{ref}(y\mid x)}$，参考点 $z_0 = \text{KL}(\pi_\theta(\cdot\mid x)\,\|\,\pi_{ref}(\cdot\mid x))$（实践中用 batch 内不匹配的 $(x, y')$ 估计，并截断为非负，不回传梯度）：
+📄 Ethayarajh et al., ICML 2024：基于 Kahneman–Tversky 的前景理论，只需要每条回答"可取 / 不可取"的二值标签。令 $r_\theta(x,y) = \log\frac{\pi_\theta(y\mid x)}{\pi_{ref}(y\mid x)}$，参考点 $z_0 = \text{KL}(\pi_\theta(\cdot\mid x)\thinspace \Vert \thinspace \pi_{ref}(\cdot\mid x))$（实践中用 batch 内不匹配的 $(x, y')$ 估计，并截断为非负，不回传梯度）：
 
 $$v(x,y) = \begin{cases}\lambda_D\,\sigma\big(\beta(r_\theta(x,y) - z_0)\big) & y\text{ 可取}\\[2pt] \lambda_U\,\sigma\big(\beta(z_0 - r_\theta(x,y))\big) & y\text{ 不可取}\end{cases},\qquad \mathcal{L}_{KTO} = \mathbb{E}\left[\lambda_y - v(x,y)\right]$$
 
-📄 论文报告在 1B–30B 规模上，KTO 只用二值反馈就能匹配或超过 DPO；$\lambda_D, \lambda_U$ 用于处理好坏样本数量不平衡。
+📄 论文报告在 1B–30B 规模上，KTO 只用二值反馈就能匹配或超过 DPO； $\lambda_D, \lambda_U$ 用于处理好坏样本数量不平衡。
 
 > ⚠️ 旧版把参考点 $z_0$ 写成"数据集平均的 reward"，不准确：它是对当前策略与参考模型之间 KL 的估计。
 
@@ -331,7 +331,7 @@ $$\mathcal{L}_{SimPO} = -\mathbb{E}\left[\log\sigma\!\left(\frac{\beta}{|y_w|}\l
 
 $$\mathcal{L}_{ORPO} = \mathcal{L}_{SFT}(x,y_w) + \lambda\cdot\left(-\log\sigma\!\left(\log\frac{\text{odds}_\theta(y_w\mid x)}{\text{odds}_\theta(y_l\mid x)}\right)\right),\qquad \text{odds}_\theta(y\mid x) = \frac{P_\theta(y\mid x)}{1 - P_\theta(y\mid x)}$$
 
-其中 $P_\theta(y\mid x)$ 是**按长度归一化**的似然 $\exp\left(\frac1{|y|}\sum_t\log\pi_\theta(y_t\mid x,y_{<t})\right)$。
+其中 $P_\theta(y\mid x)$ 是**按长度归一化**的似然 $\exp\left(\frac1{|y|}\sum_t\log\pi_\theta(y_t\mid x,y_{\lt t})\right)$。
 
 > ❌ 旧版的对比表把 ORPO 标为"需要参考模型"，错误。
 
@@ -402,8 +402,8 @@ $$\mathcal{L}_{ORPO} = \mathcal{L}_{SFT}(x,y_w) + \lambda\cdot\left(-\log\sigma\
 
 | 关键点 | 你必须能脱口而出 | 性质 |
 |---|---|---|
-| 闭式解 | $\pi^*\propto\pi_{ref}e^{r/\beta}$ | 🧮 |
-| 反解奖励 | $r = \beta\log\frac{\pi^*}{\pi_{ref}} + \beta\log Z(x)$ | 🧮 |
+| 闭式解 | $\pi^\ast \propto\pi_{ref}e^{r/\beta}$ | 🧮 |
+| 反解奖励 | $r = \beta\log\frac{\pi^\ast }{\pi_{ref}} + \beta\log Z(x)$ | 🧮 |
 | $Z(x)$ 抵消 | 只在同一 prompt 的两个回答之间 | 🧮 |
 | DPO 损失 | $-\log\sigma(\beta[\log\text{ratio}_w - \log\text{ratio}_l])$；序列对数概率求和 | 🧮 |
 | 梯度 | 按"隐式奖励排错程度"加权 | 🧮 + 📄 |

@@ -63,17 +63,17 @@ logits = LMHead(RMSNorm(x))       # Pre-Norm 需要最后再做一次归一化
 
 > ⚠️ 不要把两种写法混在一张图里。原论文是 Post-Norm；Pre-Norm 是后来的改动（第 3 章 Q4）。
 
-**原论文 base 模型的超参**（📄 Vaswani et al. 2017, Table 3）：$d_{model}=512$，$h=8$，$d_k=d_v=64$，$d_{ff}=2048$，$N=6$。
+**原论文 base 模型的超参**（📄 Vaswani et al. 2017, Table 3）： $d_{model}=512$， $h=8$， $d_k=d_v=64$， $d_{ff}=2048$， $N=6$。
 
 **参数量的粗算**（忽略 norm 和 bias，标准 MHA + $d_{ff}=4d$）：
 
 | 子层 | 参数量 |
 |---|---|
-| Attention（$W_Q, W_K, W_V, W_O$） | $4d^2$ |
-| FFN（两层，$d_{ff}=4d$） | $8d^2$ |
+| Attention（ $W_Q, W_K, W_V, W_O$） | $4d^2$ |
+| FFN（两层， $d_{ff}=4d$） | $8d^2$ |
 | 每层合计 | $12d^2$ |
 
-🧮 所以 FFN 约占每层参数的 2/3。总参数量约为 $12Ld^2$ 加上词表嵌入。这个公式能用来快速估算模型规模，例如 GPT-3 175B：$L=96, d=12288$，$12 \times 96 \times 12288^2 \approx 174\text{B}$。用了 GQA 后 attention 参数会更少，SwiGLU 取 $d_{ff}=\frac{8}{3}d$ 时 FFN 仍约为 $8d^2$（第 3 章 Q6）。
+🧮 所以 FFN 约占每层参数的 2/3。总参数量约为 $12Ld^2$ 加上词表嵌入。这个公式能用来快速估算模型规模，例如 GPT-3 175B： $L=96, d=12288$， $12 \times 96 \times 12288^2 \approx 174\text{B}$。用了 GQA 后 attention 参数会更少，SwiGLU 取 $d_{ff}=\frac{8}{3}d$ 时 FFN 仍约为 $8d^2$（第 3 章 Q6）。
 
 ### 🔥 高频追问
 
@@ -206,7 +206,7 @@ A：📄 2025 年 Google 发布了 **T5Gemma**：用预训练好的 decoder-only
 
 ### 🎯 一句话标答
 
-> 每个 token 投影出 Query、Key、Value；用 Q 和所有 K 的点积（缩放后）经过按行 softmax 得到注意力权重，再对 V 加权求和：$\text{Attention}(Q,K,V) = \text{softmax}\left(\frac{QK^T}{\sqrt{d_k}}\right)V$。
+> 每个 token 投影出 Query、Key、Value；用 Q 和所有 K 的点积（缩放后）经过按行 softmax 得到注意力权重，再对 V 加权求和： $\text{Attention}(Q,K,V) = \text{softmax}\left(\frac{QK^T}{\sqrt{d_k}}\right)V$。
 
 ### 🗣️ 30 秒口语版
 
@@ -218,7 +218,7 @@ A：📄 2025 年 Google 发布了 **T5Gemma**：用预训练好的 decoder-only
 
 **Step 0**：输入 $X \in \mathbb{R}^{n \times d_{model}}$。
 
-**Step 1**：线性投影，$W^Q, W^K \in \mathbb{R}^{d_{model} \times d_k}$，$W^V \in \mathbb{R}^{d_{model} \times d_v}$：
+**Step 1**：线性投影， $W^Q, W^K \in \mathbb{R}^{d_{model} \times d_k}$， $W^V \in \mathbb{R}^{d_{model} \times d_v}$：
 
 $$Q = XW^Q,\quad K = XW^K,\quad V = XW^V$$
 
@@ -238,7 +238,7 @@ $$A_{ij} = \frac{\exp(S_{ij})}{\sum_{k} \exp(S_{ik})}$$
 
 $$\text{Output}_i = \sum_j A_{ij} V_j, \qquad \text{Output} = AV \in \mathbb{R}^{n \times d_v}$$
 
-🧮 **一个有用的改写**：$S = X W^Q (W^K)^T X^T / \sqrt{d_k}$。中间的 $W^Q (W^K)^T \in \mathbb{R}^{d_{model} \times d_{model}}$ 是一个**秩不超过 $d_k$ 的双线性形式**。这说明：
+🧮 **一个有用的改写**： $S = X W^Q (W^K)^T X^T / \sqrt{d_k}$。中间的 $W^Q (W^K)^T \in \mathbb{R}^{d_{model} \times d_{model}}$ 是一个**秩不超过 $d_k$ 的双线性形式**。这说明：
 - Q、K 分开参数化，等价于学习一个低秩的、**非对称**的相似度矩阵；
 - 这个低秩结构也是 MLA 中"权重吸收"技巧的基础（Q7）。
 
@@ -271,8 +271,8 @@ def self_attention(X, W_Q, W_K, W_V, mask=None):
 **Q：为什么要 Q、K、V 三个矩阵？直接用 $XX^T$ 不行吗？**
 
 A：
-- 🧮 $XX^T$ 是**对称**的，$i$ 对 $j$ 的分数等于 $j$ 对 $i$ 的分数，无法表示有方向的关系（例如"代词找它指代的名词"）。$XW^Q(W^K)^TX^T$ 一般不对称。
-- 🧮 $XX^T$ 的对角线 $\|x_i\|^2$ 通常最大，每个 token 会倾向于关注自己。
+- 🧮 $XX^T$ 是**对称**的， $i$ 对 $j$ 的分数等于 $j$ 对 $i$ 的分数，无法表示有方向的关系（例如"代词找它指代的名词"）。 $XW^Q(W^K)^TX^T$ 一般不对称。
+- 🧮 $XX^T$ 的对角线 $\Vert x_i\Vert ^2$ 通常最大，每个 token 会倾向于关注自己。
 - V 单独投影，让"用什么来匹配"（Q、K 子空间）和"传递什么内容"（V 子空间）解耦。
 
 **Q：Softmax 能换成别的吗？**
@@ -320,7 +320,7 @@ softmax 饱和时，雅可比矩阵 diag(p) − ppᵀ 接近零矩阵，梯度�
 
 ### 🧮 推导
 
-设 $q_i, k_i$ 相互独立，$\mathbb{E}[q_i]=\mathbb{E}[k_i]=0$，$\text{Var}(q_i)=\text{Var}(k_i)=1$：
+设 $q_i, k_i$ 相互独立， $\mathbb{E}[q_i]=\mathbb{E}[k_i]=0$， $\text{Var}(q_i)=\text{Var}(k_i)=1$：
 
 $$\mathbb{E}[q_ik_i] = 0, \qquad \text{Var}(q_ik_i) = \mathbb{E}[q_i^2]\mathbb{E}[k_i^2] = 1$$
 
@@ -332,7 +332,7 @@ $$\text{Var}(q\cdot k) = \sum_{i=1}^{d_k}\text{Var}(q_ik_i) = d_k \quad\Rightarr
 
 $$\frac{\partial p}{\partial s} = \text{diag}(p) - pp^T$$
 
-当 $p$ 接近 one-hot（$p_j \approx 1$，其余 $\approx 0$）时，这个矩阵的每一项都接近 0。
+当 $p$ 接近 one-hot（ $p_j \approx 1$，其余 $\approx 0$）时，这个矩阵的每一项都接近 0。
 
 📄 原论文第 3.2.1 节的脚注给出了上面的方差计算，正文用的是"We suspect that..."。
 
@@ -348,9 +348,9 @@ A：🧮 在"各分量独立"的假设下，目标是让 logit 的**标准差**�
 
 A：初始化时大致满足，训练过程中会偏离。大模型训练中 Q、K 的范数可能持续增长，导致 attention logit 过大、训练发散。这正是 **QK-Norm** 要解决的问题（第 3 章 Q8）：直接对 Q、K 做归一化，不再依赖初始化来保证尺度。
 
-**Q：$1/\sqrt{d_k}$ 和温度是什么关系？**
+**Q： $1/\sqrt{d_k}$ 和温度是什么关系？**
 
-A：$1/\sqrt{d_k}$ 就是一个固定的温度系数。有的工作把它换成可学习的标量（如 Henry et al. 2020 的 QK-Norm 中的 $g$）。长上下文外推时，也有方法根据长度调整 attention 温度（例如 YaRN 中的温度修正，→ 第 2 章）。
+A： $1/\sqrt{d_k}$ 就是一个固定的温度系数。有的工作把它换成可学习的标量（如 Henry et al. 2020 的 QK-Norm 中的 $g$）。长上下文外推时，也有方法根据长度调整 attention 温度（例如 YaRN 中的温度修正，→ 第 2 章）。
 
 ### ⚠️ 常见陷阱
 
@@ -370,7 +370,7 @@ A：$1/\sqrt{d_k}$ 就是一个固定的温度系数。有的工作把它换成�
 
 > 序列长度 $n$、隐藏维度 $d$ 时，单层 attention 的时间复杂度为 $O(nd^2 + n^2d)$（投影 + 分数与加权），朴素实现需要 $O(n^2)$ 的额外显存存放注意力矩阵。FlashAttention 不改变 FLOPs，但通过分块计算把额外显存降到 $O(n)$，并大幅减少显存读写。
 
-### 📐 分解（单头视角，$d_k = d$）
+### 📐 分解（单头视角， $d_k = d$）
 
 | 步骤 | 操作 | FLOPs（乘加记 2） | 中间结果 |
 |---|---|---|---|
@@ -380,9 +380,9 @@ A：$1/\sqrt{d_k}$ 就是一个固定的温度系数。有的工作把它换成�
 | $AV$ | $(n,n)\times(n,d)$ | $2n^2d$ | $O(nd)$ |
 | 输出投影 | $(n,d)\times(d,d)$ | $2nd^2$ | $O(nd)$ |
 
-🧮 合计约 $8nd^2 + 4n^2d$。所以 **$n > 2d$ 时注意力部分开始主导**。例如 $d=4096$ 时，序列超过约 8K token，$n^2$ 项才超过投影项。如果再算上 FFN 的 $16nd^2$（$d_{ff}=4d$），整层中 attention 的二次项占主导需要更长的序列。这就是为什么在常见的 4K–8K 训练长度下，**大部分计算其实在矩阵投影和 FFN 上**。
+🧮 合计约 $8nd^2 + 4n^2d$。所以 **$n > 2d$ 时注意力部分开始主导**。例如 $d=4096$ 时，序列超过约 8K token， $n^2$ 项才超过投影项。如果再算上 FFN 的 $16nd^2$（ $d_{ff}=4d$），整层中 attention 的二次项占主导需要更长的序列。这就是为什么在常见的 4K–8K 训练长度下，**大部分计算其实在矩阵投影和 FFN 上**。
 
-> ⚠️ 加上多头后结论不变：$h$ 个头，每头 $d/h$ 维，二次项合计仍为 $4n^2d$。
+> ⚠️ 加上多头后结论不变： $h$ 个头，每头 $d/h$ 维，二次项合计仍为 $4n^2d$。
 
 ### 🔥 高频追问
 
@@ -398,7 +398,7 @@ A：📄 Dao et al. 2022：FlashAttention 是 **IO 感知**的精确注意力算
 
 A：几条路线：
 - **稀疏注意力**：📄 Longformer（滑窗 + 全局 token）、BigBird（滑窗 + 全局 + 随机），复杂度 $O(n)$。现代 LLM 中常见的是**滑动窗口与全局注意力交替**（如 Mistral 7B 的滑窗、Gemma 2/3 的局部-全局交替）。
-- **线性注意力 / SSM**：$O(n)$，并且推理时状态大小固定（Q10）。
+- **线性注意力 / SSM**： $O(n)$，并且推理时状态大小固定（Q10）。
 - **可训练的稀疏注意力**：📄 DeepSeek 的 NSA（Native Sparse Attention, 2025）在训练时就学习稀疏模式。
 - **FlashAttention**：不改变算法复杂度，只优化实现。
 
@@ -436,7 +436,7 @@ A：生成第 $t$ 个 token 时，新 token 的 query 只需和 $t$ 个缓存的
 
 $$\text{MultiHead}(X) = \text{Concat}(\text{head}_1, \ldots, \text{head}_h)W^O, \qquad \text{head}_i = \text{Attention}(XW_i^Q, XW_i^K, XW_i^V)$$
 
-$W_i^Q, W_i^K, W_i^V \in \mathbb{R}^{d_{model}\times d_k}$，$d_k = d_{model}/h$，$W^O \in \mathbb{R}^{d_{model}\times d_{model}}$。
+$W_i^Q, W_i^K, W_i^V \in \mathbb{R}^{d_{model}\times d_k}$， $d_k = d_{model}/h$， $W^O \in \mathbb{R}^{d_{model}\times d_{model}}$。
 
 🧮 参数量：Q/K/V 投影共 $3 \cdot h \cdot d_{model} \cdot d_k = 3d_{model}^2$，输出投影 $d_{model}^2$，与单头完全相同。
 
@@ -444,7 +444,7 @@ $W_i^Q, W_i^K, W_i^V \in \mathbb{R}^{d_{model}\times d_k}$，$d_k = d_{model}/h$
 
 - **头的分工**：📄 Voita et al. 2019（*Analyzing Multi-Head Self-Attention: Specialized Heads Do the Heavy Lifting, the Rest Can Be Pruned*）在机器翻译模型中识别出几类重要的头：关注相邻位置的"位置头"、对应句法依存的"句法头"、关注低频词的头。用可微的剪枝方法去掉大部分头之后，BLEU 下降很小。
 - **冗余**：📄 Michel et al. 2019（*Are Sixteen Heads Really Better than One?*）发现，测试时很多层可以只保留一个头而性能基本不变；但训练时多头仍然有用。
-- **低秩瓶颈**：📄 Bhojanapalli et al. 2020（*Low-Rank Bottleneck in Multi-head Attention Models*）指出，当每头维度 $d_k < n$ 时，每个头的注意力矩阵表达能力受限；他们建议让 head 维度和序列长度相关，而不是固定为 $d_{model}/h$。
+- **低秩瓶颈**：📄 Bhojanapalli et al. 2020（*Low-Rank Bottleneck in Multi-head Attention Models*）指出，当每头维度 $d_k \lt n$ 时，每个头的注意力矩阵表达能力受限；他们建议让 head 维度和序列长度相关，而不是固定为 $d_{model}/h$。
 - **机制可解释性**：📄 Olsson et al. 2022（Anthropic, *In-context Learning and Induction Heads*）发现了"归纳头"（induction head）：两层注意力配合实现"在前文中找到当前 token 上次出现的位置，复制它后面的 token"。他们提供证据表明，归纳头可能是 in-context learning 的重要机制之一。
 
 ### 🔥 高频追问
@@ -456,7 +456,7 @@ A：不是。头数增加意味着每头维度减小，低秩瓶颈更严重。�
 | 模型 | head 维度 |
 |---|---|
 | GPT-2 | 64 |
-| GPT-3 175B（$d=12288$，96 头） | 128 |
+| GPT-3 175B（ $d=12288$，96 头） | 128 |
 | LLaMA 系列 | 128 |
 | Gemma（7B）/ Gemma 2 部分尺寸 | 256 |
 | DeepSeek-V3（MLA） | Q/K 为 128 + 64（RoPE 部分），V 为 128 |
@@ -500,18 +500,18 @@ MLA 是 DeepSeek-V2 提出的，思路不是减少头数，而是把每个 token
 
 ### 📐 KV Cache 对比
 
-设 $L=32$ 层、$n_h=32$ 个 query 头、$d_h=128$、序列长度 4096、FP16（2 字节）。每个 token 每层缓存的元素数和总量：
+设 $L=32$ 层、 $n_h=32$ 个 query 头、 $d_h=128$、序列长度 4096、FP16（2 字节）。每个 token 每层缓存的元素数和总量：
 
 | 方法 | 每 token 每层缓存元素数 | 4096 token 总量 | 相对 MHA |
 |---|---|---|---|
 | MHA | $2 n_h d_h = 8192$ | 2 GiB | 100% |
-| GQA（$g=8$） | $2 g d_h = 2048$ | 512 MiB | 25% |
+| GQA（ $g=8$） | $2 g d_h = 2048$ | 512 MiB | 25% |
 | MQA | $2 d_h = 256$ | 64 MiB | 3.1% |
 | MLA（DeepSeek-V2 维度） | $d_c + d_h^R = 512 + 64 = 576$ | 144 MiB | 7.0% |
 
-🧮 计算方法：总字节数 = 元素数 × 2 字节 × 层数 × token 数。例如 MHA：$8192 \times 2 \times 32 \times 4096 = 2^{31}$ 字节 = 2 GiB。
+🧮 计算方法：总字节数 = 元素数 × 2 字节 × 层数 × token 数。例如 MHA： $8192 \times 2 \times 32 \times 4096 = 2^{31}$ 字节 = 2 GiB。
 
-> 注：MLA 这一行把 DeepSeek-V2 的 $d_c=512$、$d_h^R=64$ 套到了这个假想模型上，只用于比较量级。📄 DeepSeek-V2 报告中"KV Cache 减少 93.3%"是**整个 DeepSeek-V2 与 DeepSeek 67B** 的比较，其中还包括层数和缓存量化等因素，不能全部归功于 MLA。
+> 注：MLA 这一行把 DeepSeek-V2 的 $d_c=512$、 $d_h^R=64$ 套到了这个假想模型上，只用于比较量级。📄 DeepSeek-V2 报告中"KV Cache 减少 93.3%"是**整个 DeepSeek-V2 与 DeepSeek 67B** 的比较，其中还包括层数和缓存量化等因素，不能全部归功于 MLA。
 
 ### 🧮 MLA 推导（重点）
 
@@ -525,7 +525,7 @@ $$c_t^{KV} = W^{DKV} h_t \in \mathbb{R}^{d_c}, \qquad k_t^{C} = W^{UK} c_t^{KV},
 
 $$q_{t,i}^T k_{s,i}^{C} = (W_i^{Q} h_t)^T (W_i^{UK} c_s^{KV}) = h_t^T \underbrace{(W_i^{Q})^T W_i^{UK}}_{\text{可预先合并}} c_s^{KV}$$
 
-所以 query 可以直接投影到 $d_c$ 维的潜在空间，与缓存的 $c_s^{KV}$ 做点积，**不需要还原出完整的 K**。同理，$W^{UV}$ 可以吸收进输出投影 $W^O$。
+所以 query 可以直接投影到 $d_c$ 维的潜在空间，与缓存的 $c_s^{KV}$ 做点积，**不需要还原出完整的 K**。同理， $W^{UV}$ 可以吸收进输出投影 $W^O$。
 
 **RoPE 带来的问题**：RoPE 在 $q$ 和 $k$ 上分别乘以和位置有关的旋转矩阵 $R_t, R_s$：
 
@@ -548,7 +548,7 @@ $R_{s-t}$ 夹在 $W^Q$ 和 $W^{UK}$ 中间，并且随相对位置变化，所�
 
 **Q：为什么 GQA 的质量损失比 MQA 小？**
 
-A：📄 Ainslie et al. 2023 报告，GQA 的质量接近 MHA，速度接近 MQA。💭 直观上，$g$ 组 KV 的表示容量是 MQA 的 $g$ 倍，不同组的 query 可以匹配不同的 K、V 子空间。
+A：📄 Ainslie et al. 2023 报告，GQA 的质量接近 MHA，速度接近 MQA。💭 直观上， $g$ 组 KV 的表示容量是 MQA 的 $g$ 倍，不同组的 query 可以匹配不同的 K、V 子空间。
 
 **Q：MLA 为什么能在压缩的同时保持质量？**
 
@@ -596,7 +596,7 @@ A：
   t4 [s41   s42   s43   s44]
 ```
 
-softmax 后，$-\infty$ 的位置权重为 0。
+softmax 后， $-\infty$ 的位置权重为 0。
 
 ### 💻 实现
 
@@ -745,7 +745,7 @@ A：取决于约束：
 ## ✅ 自测题
 
 1. 写出原始 Transformer 和 LLaMA 的单层结构，并指出 5 处不同。
-2. 用 $12Ld^2$ 估算 LLaMA-2 7B（$L=32, d=4096$）的非嵌入参数量，并解释和 7B 的差距来自哪里（提示：SwiGLU 的 $d_{ff}=11008$、词表嵌入）。
+2. 用 $12Ld^2$ 估算 LLaMA-2 7B（ $L=32, d=4096$）的非嵌入参数量，并解释和 7B 的差距来自哪里（提示：SwiGLU 的 $d_{ff}=11008$、词表嵌入）。
 3. 推导 $\text{Var}(q\cdot k)=d_k$，并说明在什么情况下这个结论不成立。
 4. 写出 MLA 的权重吸收公式，并说明 RoPE 为什么会破坏吸收。
 5. Wang et al. 2022 的对照实验得出了什么结论？它对"为什么 LLM 是 Decoder-Only"的回答有什么影响？

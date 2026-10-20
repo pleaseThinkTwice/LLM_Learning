@@ -38,7 +38,7 @@
 | 模型状态显存 | 约 112 GB（16 字节/参数） | 约 14 GB（冻结的 bf16 权重）+ 很小的 LoRA 状态 |
 | 每个任务的存储 | 约 14 GB | 约 80 MB |
 
-🧮 LoRA 参数量估算：LLaMA-2 7B 每层有 4 个 $4096\times4096$ 的注意力投影和 3 个 $4096\times11008$ 的 MLP 矩阵。$r=16$ 时，每个矩阵增加 $r(d_{in}+d_{out})$ 个参数：注意力部分 $4\times16\times8192$，MLP 部分 $3\times16\times15104$，每层约 117 万，32 层共约 3700 万。
+🧮 LoRA 参数量估算：LLaMA-2 7B 每层有 4 个 $4096\times4096$ 的注意力投影和 3 个 $4096\times11008$ 的 MLP 矩阵。 $r=16$ 时，每个矩阵增加 $r(d_{in}+d_{out})$ 个参数：注意力部分 $4\times16\times8192$，MLP 部分 $3\times16\times15104$，每层约 117 万，32 层共约 3700 万。
 
 💭 激活显存不会因为 LoRA 而减少（前向反向仍然要经过整个模型），所以长序列训练仍需要 gradient checkpointing 等手段。
 
@@ -86,7 +86,7 @@ A：📄 Lester et al. 2021 发现，随着模型规模增长（在 T5 上到约
 
 ### 🎯 一句话标答
 
-> 📄 LoRA 冻结预训练权重 $W_0\in\mathbb{R}^{d_{out}\times d_{in}}$，把更新参数化为 $\Delta W = BA$，$B\in\mathbb{R}^{d_{out}\times r}$，$A\in\mathbb{R}^{r\times d_{in}}$，$r\ll\min(d_{in},d_{out})$。前向为 $h = W_0x + \frac{\alpha}{r}BAx$。**$A$ 随机初始化、$B$ 初始化为 0**，因此训练开始时 $\Delta W=0$，模型与原模型完全相同。
+> 📄 LoRA 冻结预训练权重 $W_0\in\mathbb{R}^{d_{out}\times d_{in}}$，把更新参数化为 $\Delta W = BA$， $B\in\mathbb{R}^{d_{out}\times r}$， $A\in\mathbb{R}^{r\times d_{in}}$， $r\ll\min(d_{in},d_{out})$。前向为 $h = W_0x + \frac{\alpha}{r}BAx$。**$A$ 随机初始化、 $B$ 初始化为 0**，因此训练开始时 $\Delta W=0$，模型与原模型完全相同。
 
 ### 🧮 推导与细节
 
@@ -94,7 +94,7 @@ A：📄 Lester et al. 2021 发现，随着模型规模增长（在 T5 上到约
 
 $$h = W_0x + \frac{\alpha}{r}BAx$$
 
-**参数量**：每个矩阵从 $d_{out}d_{in}$ 降到 $r(d_{in}+d_{out})$。$d_{in}=d_{out}=4096$、$r=8$ 时，从约 1678 万降到 65536，约为 0.39%。
+**参数量**：每个矩阵从 $d_{out}d_{in}$ 降到 $r(d_{in}+d_{out})$。 $d_{in}=d_{out}=4096$、 $r=8$ 时，从约 1678 万降到 65536，约为 0.39%。
 
 **梯度**：令 $g = \partial\mathcal{L}/\partial h$（对单个样本），则
 
@@ -106,9 +106,9 @@ $$\frac{\partial\mathcal{L}}{\partial B} = \frac{\alpha}{r}\,g\,(Ax)^T,\qquad \f
 
 ### 📄 原论文的关键实验与分析
 
-- **加在哪些矩阵上**：📄 在 GPT-3 175B、固定可训练参数预算的实验中，同时调整 $W_q$ 和 $W_v$（每个 $r=4$）或同时调整 $W_q, W_k, W_v, W_o$（每个 $r=2$），比只调整单个矩阵（$r=8$）效果更好。结论是"用较小的 rank 覆盖更多矩阵"比"在少数矩阵上用大 rank"更好。
+- **加在哪些矩阵上**：📄 在 GPT-3 175B、固定可训练参数预算的实验中，同时调整 $W_q$ 和 $W_v$（每个 $r=4$）或同时调整 $W_q, W_k, W_v, W_o$（每个 $r=2$），比只调整单个矩阵（ $r=8$）效果更好。结论是"用较小的 rank 覆盖更多矩阵"比"在少数矩阵上用大 rank"更好。
 - **秩真的很低吗**：📄 他们比较了 $r=8$ 和 $r=64$ 学到的子空间，发现最重要的几个方向高度重合，说明 $\Delta W$ 的"有效秩"很低。
-- **$\Delta W$ 学到了什么**：📄 分析发现 $\Delta W$ 与 $W_0$ 有一定相关性，但它**放大的是 $W_0$ 中没有被强调的方向**，放大倍数很大（$r=4$ 时约为 20 倍左右）。作者据此推测，LoRA 放大了预训练中已学到、但不突出的任务相关特征。
+- **$\Delta W$ 学到了什么**：📄 分析发现 $\Delta W$ 与 $W_0$ 有一定相关性，但它**放大的是 $W_0$ 中没有被强调的方向**，放大倍数很大（ $r=4$ 时约为 20 倍左右）。作者据此推测，LoRA 放大了预训练中已学到、但不突出的任务相关特征。
 - 📄 理论背景：Aghajanyan et al. 2021（*Intrinsic Dimensionality Explains the Effectiveness of Language Model Fine-Tuning*）发现，预训练模型微调时只需要在一个很低维的随机子空间中优化就能达到接近全参微调的效果，并且模型越大、预训练越充分，所需的"内在维度"越低。
 
 > ❌ 旧版写"对 ΔW 做 SVD，前 r 个奇异值解释 >80% 的方差""LLaMA 系实践通常加 QKVO、不加 FFN"，没有出处。📄 QLoRA 论文的结论恰恰是：**要达到全参微调的效果，需要把 LoRA 加到所有线性层上**（包括 MLP）。
@@ -142,9 +142,9 @@ class LoRALinear(nn.Module):
 
 ### 🔥 高频追问
 
-**Q：为什么是 $B=0$、$A$ 随机，而不是反过来？**
+**Q：为什么是 $B=0$、 $A$ 随机，而不是反过来？**
 
-A：两种方式都能保证初始 $\Delta W=0$。📄 Hayou et al. 2024（*The Impact of Initialization on LoRA Finetuning Dynamics*）从理论和实验上比较了两者：**$B=0$、$A$ 随机**的初始化允许使用更大的学习率而不发生不稳定，从而学习得更高效；$A=0$ 的初始化在相同学习率下更新幅度不足。这为默认做法提供了理论依据。
+A：两种方式都能保证初始 $\Delta W=0$。📄 Hayou et al. 2024（*The Impact of Initialization on LoRA Finetuning Dynamics*）从理论和实验上比较了两者：**$B=0$、 $A$ 随机**的初始化允许使用更大的学习率而不发生不稳定，从而学习得更高效； $A=0$ 的初始化在相同学习率下更新幅度不足。这为默认做法提供了理论依据。
 
 **Q：两个都随机初始化不行吗？**
 
@@ -161,25 +161,25 @@ A：🧮 那样初始时 $\Delta W = BA \neq 0$，模型一开始就偏离了预
 
 ### 🎯 一句话标答
 
-> $r$ 决定增量的容量，$\alpha/r$ 决定增量的缩放。常见起点：$r=16$、$\alpha=16$ 或 $32$，**LoRA 加到所有线性层**。📄 LoRA 的最优学习率通常比全参微调**高约一个数量级**。$\alpha/r$ 的缩放使最优学习率对 $r$ 不太敏感；📄 rsLoRA 指出，在 rank 很大时应改用 $\alpha/\sqrt r$ 的缩放。
+> $r$ 决定增量的容量， $\alpha/r$ 决定增量的缩放。常见起点： $r=16$、 $\alpha=16$ 或 $32$，**LoRA 加到所有线性层**。📄 LoRA 的最优学习率通常比全参微调**高约一个数量级**。 $\alpha/r$ 的缩放使最优学习率对 $r$ 不太敏感；📄 rsLoRA 指出，在 rank 很大时应改用 $\alpha/\sqrt r$ 的缩放。
 
 ### 🧮 为什么要除以 $r$？
 
-📄 LoRA 论文的说法是：用 $\alpha/r$ 缩放后，改变 $r$ 时不需要重新调学习率（在 Adam 下，$\alpha$ 的作用近似于调整学习率）。
+📄 LoRA 论文的说法是：用 $\alpha/r$ 缩放后，改变 $r$ 时不需要重新调学习率（在 Adam 下， $\alpha$ 的作用近似于调整学习率）。
 
-📄 **rsLoRA**（Kalajdzievski 2023, *A Rank Stabilization Scaling Factor for Fine-Tuning with LoRA*）：从初始化时前向和反向信号的尺度出发，证明当 $r$ 增大时，$\alpha/r$ 会使 LoRA 的更新随 $r$ 增大而**过小**，导致大 rank 时学习变慢、提升有限；应使用 $\alpha/\sqrt r$，此时增大 rank 能带来持续的性能提升。HF PEFT 中可通过 `use_rslora=True` 开启。
+📄 **rsLoRA**（Kalajdzievski 2023, *A Rank Stabilization Scaling Factor for Fine-Tuning with LoRA*）：从初始化时前向和反向信号的尺度出发，证明当 $r$ 增大时， $\alpha/r$ 会使 LoRA 的更新随 $r$ 增大而**过小**，导致大 rank 时学习变慢、提升有限；应使用 $\alpha/\sqrt r$，此时增大 rank 能带来持续的性能提升。HF PEFT 中可通过 `use_rslora=True` 开启。
 
 ### 📄 学习率
 
 - 📄 Biderman et al. 2024 的扫描显示，LoRA 的最优学习率比全参微调高约一个数量级。
 - 📄 Thinking Machines（Schulman 等, 2025 博客 *LoRA Without Regret*）在 SFT 和 RL 上做了大规模扫描，得出的经验结论包括：LoRA 的最优学习率约为全参微调的 10 倍；由于 $1/r$ 缩放，最优学习率**几乎不依赖于 rank**；LoRA 对大 batch 的容忍度不如全参微调。
-- 📄 **LoRA+**（Hayou et al., ICML 2024）：从宽度无穷大极限的分析出发，指出 $A$ 和 $B$ 应使用不同的学习率，建议 $\eta_B = \lambda\eta_A$，$\lambda$ 取 16 左右，能提升效果和收敛速度。
+- 📄 **LoRA+**（Hayou et al., ICML 2024）：从宽度无穷大极限的分析出发，指出 $A$ 和 $B$ 应使用不同的学习率，建议 $\eta_B = \lambda\eta_A$， $\lambda$ 取 16 左右，能提升效果和收敛速度。
 
 ### 🔍 经验起点
 
 | 场景 | 建议 |
 |---|---|
-| 指令遵循、风格调整、小数据 SFT | $r=8$–$32$，所有线性层，学习率约为全参的 10 倍 |
+| 指令遵循、风格调整、小数据 SFT | $r=8$– $32$，所有线性层，学习率约为全参的 10 倍 |
 | 大量新知识（代码、数学、新语言） | 考虑全参微调或继续预训练；如果用 LoRA，需要更大的 rank，并接受能力上限（Q9） |
 | RL（GRPO 等） | 📄 很小的 rank 就可能足够（Q9） |
 
@@ -256,8 +256,8 @@ A：可以运行，但受 LoRA 本身"学得少"的限制（Q9）。需要注入
 | 方法 | 核心思想 | 出处 |
 |---|---|---|
 | **AdaLoRA** | 用 $P\Lambda Q$ 的 SVD 形式参数化增量，根据重要性得分**剪掉不重要的奇异值**，在不同矩阵间自适应分配 rank 预算 | 📄 Zhang et al., ICLR 2023 |
-| **DoRA** | 把权重分解为**幅度**和**方向**：$W' = m\cdot\frac{W_0+BA}{\lVert W_0+BA\rVert_c}$（按列归一化），幅度向量 $m$ 直接训练，方向用 LoRA 更新 | 📄 Liu et al., ICML 2024（NVIDIA） |
-| **VeRA** | 所有层**共享一对冻结的随机矩阵** $A, B$，每层只训练两个缩放向量 $d, b$：$\Delta W = \Lambda_b B\Lambda_d A$；参数量比 LoRA 少一个数量级以上 | 📄 Kopiczko et al., ICLR 2024 |
+| **DoRA** | 把权重分解为**幅度**和**方向**： $W' = m\cdot\frac{W_0+BA}{\lVert W_0+BA\rVert_c}$（按列归一化），幅度向量 $m$ 直接训练，方向用 LoRA 更新 | 📄 Liu et al., ICML 2024（NVIDIA） |
+| **VeRA** | 所有层**共享一对冻结的随机矩阵** $A, B$，每层只训练两个缩放向量 $d, b$： $\Delta W = \Lambda_b B\Lambda_d A$；参数量比 LoRA 少一个数量级以上 | 📄 Kopiczko et al., ICLR 2024 |
 | **LoRA+** | $B$ 的学习率设为 $A$ 的 $\lambda$ 倍（约 16） | 📄 Hayou et al., ICML 2024 |
 | **rsLoRA** | 缩放因子改为 $\alpha/\sqrt r$ | 📄 Kalajdzievski 2023 |
 | **PiSSA** | 用 $W_0$ 的**主奇异向量**初始化 $A, B$，冻结剩余部分，收敛更快 | 📄 Meng et al., NeurIPS 2024 |
@@ -296,7 +296,7 @@ A：LoRA 限制的是**权重更新的形式**（低秩增量）；GaLore 限制
 
 ### 🎯 一句话标答
 
-> 单任务部署时把 LoRA 合并进权重（$W' = W_0 + \frac{\alpha}{r}BA$），推理零开销；多任务/多租户时保持 adapter 独立，由服务系统在同一 batch 中为不同请求应用不同的 adapter（📄 Punica、S-LoRA，vLLM 等推理引擎也已支持）。多个微调模型还可以通过**模型融合**合成一个模型。
+> 单任务部署时把 LoRA 合并进权重（ $W' = W_0 + \frac{\alpha}{r}BA$），推理零开销；多任务/多租户时保持 adapter 独立，由服务系统在同一 batch 中为不同请求应用不同的 adapter（📄 Punica、S-LoRA，vLLM 等推理引擎也已支持）。多个微调模型还可以通过**模型融合**合成一个模型。
 
 ### 📄 多 LoRA 服务
 
@@ -407,12 +407,12 @@ A：可以，把合并后的模型当作新的 base 即可（例如 SFT LoRA →
 
 | 关键点 | 你必须能脱口而出 | 性质 |
 |---|---|---|
-| LoRA 公式 | $h = W_0x + \frac{\alpha}{r}BAx$；$B=0$、$A$ 随机 | 🧮 |
+| LoRA 公式 | $h = W_0x + \frac{\alpha}{r}BAx$； $B=0$、 $A$ 随机 | 🧮 |
 | 参数量 | $r(d_{in}+d_{out})$ | 🧮 |
 | 初始化 | $B=0$ 允许更大学习率（Hayou 2024） | 📄 |
 | 加在哪里 | 所有线性层（含 MLP）；小 rank 覆盖更多矩阵更好 | 📄 |
 | 缩放 | $\alpha/r$；大 rank 用 $\alpha/\sqrt r$（rsLoRA） | 📄 |
-| 学习率 | 约为全参的 10 倍；LoRA+：$\eta_B \approx 16\eta_A$ | 📄 |
+| 学习率 | 约为全参的 10 倍；LoRA+： $\eta_B \approx 16\eta_A$ | 📄 |
 | QLoRA | NF4（正态分位点 + 精确的 0）、双重量化省约 0.37 bit/参数、分页优化器；NF4 恢复 16-bit LoRA 效果 | 🧮 + 📄 |
 | DoRA / VeRA | 幅度–方向解耦 / 共享冻结随机矩阵 + 缩放向量 | 📄 |
 | 多 LoRA 服务 | Punica 的 SGMV、S-LoRA 的统一分页 | 📄 |
@@ -421,7 +421,7 @@ A：可以，把合并后的模型当作新的 base 即可（例如 SFT LoRA →
 
 ## ✅ 自测题
 
-1. 推导 LoRA 中 $A$、$B$ 的梯度，并说明为什么第一步只有 $B$ 会被更新。
+1. 推导 LoRA 中 $A$、 $B$ 的梯度，并说明为什么第一步只有 $B$ 会被更新。
 2. 计算 LLaMA-2 7B 在 $r=16$、所有线性层加 LoRA 时的可训练参数量。
 3. 写出 NF4 的构造方法，并计算双重量化每参数节省多少 bit。
 4. 为什么 QLoRA 训练出的 adapter 最好合并到反量化后的权重上？

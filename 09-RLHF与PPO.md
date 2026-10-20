@@ -68,7 +68,7 @@ A：通常会迭代。📄 Anthropic（Bai et al. 2022, *Training a Helpful and 
 
 ### 🎯 一句话标答
 
-> RM 通常由 SFT 模型初始化，把 LM head 换成标量 head，取**序列最后一个 token**（回答结尾）的隐藏状态输出分数。训练采用 **Bradley–Terry 模型**的负对数似然：$\mathcal{L} = -\log\sigma\big(r(x,y_w) - r(x,y_l)\big)$。RM 很容易过拟合，📄 InstructGPT 和 LLaMA 2 都只训练 1 个 epoch。
+> RM 通常由 SFT 模型初始化，把 LM head 换成标量 head，取**序列最后一个 token**（回答结尾）的隐藏状态输出分数。训练采用 **Bradley–Terry 模型**的负对数似然： $\mathcal{L} = -\log\sigma\big(r(x,y_w) - r(x,y_l)\big)$。RM 很容易过拟合，📄 InstructGPT 和 LLaMA 2 都只训练 1 个 epoch。
 
 ### 🧮 Bradley–Terry 模型
 
@@ -88,9 +88,9 @@ $$\mathcal{L}_{RM}(\phi) = -\mathbb{E}_{(x,y_w,y_l)\sim\mathcal{D}}\left[\log\si
 
 | 来源 | 做法 |
 |---|---|
-| 📄 InstructGPT | 每个 prompt 让标注者对 $K=4$–$9$ 个回答排序，产生 $\binom K2$ 个比较对；**把同一 prompt 的所有比较对放在一个 batch 元素中**，否则同一 prompt 的数据被重复多次，会在一个 epoch 内就过拟合 |
+| 📄 InstructGPT | 每个 prompt 让标注者对 $K=4$– $9$ 个回答排序，产生 $\binom K2$ 个比较对；**把同一 prompt 的所有比较对放在一个 batch 元素中**，否则同一 prompt 的数据被重复多次，会在一个 epoch 内就过拟合 |
 | 📄 InstructGPT | 训练标注者之间的一致率约 73%，留出标注者之间约 77% |
-| 📄 LLaMA 2 | 分别训练**有用性 RM** 和**安全性 RM**；在损失中加入与偏好强度相关的 **margin**：$-\log\sigma(r_w - r_l - m(\text{rating}))$，"明显更好"的样本对 margin 更大；只训练 1 个 epoch，作者发现训练更久会过拟合 |
+| 📄 LLaMA 2 | 分别训练**有用性 RM** 和**安全性 RM**；在损失中加入与偏好强度相关的 **margin**： $-\log\sigma(r_w - r_l - m(\text{rating}))$，"明显更好"的样本对 margin 更大；只训练 1 个 epoch，作者发现训练更久会过拟合 |
 
 > ❌ 旧版写"标注者之间一致率只有 60–70%""RM 准确率 > 80% 可能过拟合"，没有出处。InstructGPT 报告的一致率约为 73%–77%。
 
@@ -118,7 +118,7 @@ def rm_loss(rm, chosen_ids, chosen_mask, rejected_ids, rejected_mask, margin=0.0
 **Q：怎么评估一个奖励模型？**
 
 A：
-- **偏好准确率**：在留出的偏好对上，$r(y_w) > r(y_l)$ 的比例。
+- **偏好准确率**：在留出的偏好对上， $r(y_w) > r(y_l)$ 的比例。
 - 📄 **RewardBench**（Lambert et al. 2024）：覆盖对话、困难对话、安全、推理等类别的标准评测集。
 - 💭 但准确率高不代表在 RL 中好用：RL 会把策略推到 RM **没见过的分布**上，真正重要的是 RM 在策略分布上的鲁棒性。有研究发现 RewardBench 分数与下游 RLHF 效果的相关性有限。
 
@@ -154,10 +154,10 @@ $$\nabla_\theta J = \mathbb{E}_{\tau\sim\pi_\theta}\left[\sum_t\nabla_\theta\log
 
 $$\rho_t(\theta) = \frac{\pi_\theta(a_t\mid s_t)}{\pi_{old}(a_t\mid s_t)}$$
 
-得到代理目标（surrogate）$L^{CPI}(\theta) = \mathbb{E}_t[\rho_t(\theta)\hat A_t]$。
-🧮 在 $\theta = \theta_{old}$ 处，$\nabla L^{CPI} = \nabla J$。但离 $\theta_{old}$ 越远，代理目标越不可靠（这里还忽略了状态分布的变化）。
+得到代理目标（surrogate） $L^{CPI}(\theta) = \mathbb{E}_t[\rho_t(\theta)\hat A_t]$。
+🧮 在 $\theta = \theta_{old}$ 处， $\nabla L^{CPI} = \nabla J$。但离 $\theta_{old}$ 越远，代理目标越不可靠（这里还忽略了状态分布的变化）。
 
-📄 **TRPO**（Schulman et al. 2015）用 KL 散度的**硬约束** $\mathbb{E}[\text{KL}(\pi_{old}\,\|\,\pi_\theta)]\le\delta$ 来保证单调改进，需要共轭梯度和线搜索，实现复杂。
+📄 **TRPO**（Schulman et al. 2015）用 KL 散度的**硬约束** $\mathbb{E}[\text{KL}(\pi_{old}\thinspace \Vert \thinspace \pi_\theta)]\le\delta$ 来保证单调改进，需要共轭梯度和线搜索，实现复杂。
 
 ### 🧮 Step 3：PPO-Clip
 
@@ -173,7 +173,7 @@ TD 误差 $\delta_t = r_t + \gamma V(s_{t+1}) - V(s_t)$，
 
 $$\hat A_t^{GAE(\gamma,\lambda)} = \sum_{l\ge0}(\gamma\lambda)^l\delta_{t+l}$$
 
-$\lambda=0$ 时是一步 TD（低方差、高偏差），$\lambda=1$ 时是蒙特卡洛回报减基线（无偏、高方差）。LLM RLHF 中常用 $\gamma=1$。
+$\lambda=0$ 时是一步 TD（低方差、高偏差）， $\lambda=1$ 时是蒙特卡洛回报减基线（无偏、高方差）。LLM RLHF 中常用 $\gamma=1$。
 
 ### 🧮 Step 5：LLM 中的设定
 
@@ -182,8 +182,8 @@ $\lambda=0$ 时是一步 TD（低方差、高偏差），$\lambda=1$ 时是蒙�
 
 $$r_t = -\beta\log\frac{\pi_\theta(a_t\mid s_t)}{\pi_{ref}(a_t\mid s_t)} + \mathbb{1}[t=T]\cdot r_\phi(x, y)$$
 
-- 总损失：$\mathcal{L} = -L^{CLIP} + c_1\,\mathcal{L}^{VF}$（可选熵正则；InstructGPT 式的 RLHF 一般不加熵奖励）。
-- 📄 **PPO-ptx**（InstructGPT）：在目标中加入预训练数据的对数似然 $\gamma\,\mathbb{E}_{x\sim D_{pretrain}}[\log\pi_\theta(x)]$，缓解"对齐税"。
+- 总损失： $\mathcal{L} = -L^{CLIP} + c_1\thinspace \mathcal{L}^{VF}$（可选熵正则；InstructGPT 式的 RLHF 一般不加熵奖励）。
+- 📄 **PPO-ptx**（InstructGPT）：在目标中加入预训练数据的对数似然 $\gamma\thinspace \mathbb{E}_{x\sim D_{pretrain}}[\log\pi_\theta(x)]$，缓解"对齐税"。
 
 ### 💻 伪代码
 
@@ -241,16 +241,16 @@ A：两种都有。📄 InstructGPT 的价值函数由 RM 初始化，是单独�
 
 设 $f(\rho) = \min(\rho A, \text{clip}(\rho,1-\epsilon,1+\epsilon)A)$：
 
-| | $\rho < 1-\epsilon$ | $1-\epsilon\le\rho\le1+\epsilon$ | $\rho > 1+\epsilon$ |
+| | $\rho \lt 1-\epsilon$ | $1-\epsilon\le\rho\le1+\epsilon$ | $\rho > 1+\epsilon$ |
 |---|---|---|---|
 | $A>0$（好动作） | $\rho A$，**有梯度**（允许把概率提回来） | $\rho A$，有梯度 | $(1+\epsilon)A$，**梯度为 0**（不再继续提高） |
-| $A<0$（坏动作） | $(1-\epsilon)A$，**梯度为 0**（不再继续压低） | $\rho A$，有梯度 | $\rho A$，**有梯度**（允许把概率压回去） |
+| $A\lt 0$（坏动作） | $(1-\epsilon)A$，**梯度为 0**（不再继续压低） | $\rho A$，有梯度 | $\rho A$，**有梯度**（允许把概率压回去） |
 
 🧮 规律：**当更新方向"已经走得够远"时停止；当策略朝错误方向偏离时，总是允许纠正**。`min` 使目标成为未裁剪目标的一个**下界**（悲观估计）。
 
 ### 🔥 高频追问
 
-**Q：$\epsilon$ 怎么选？要监控什么？**
+**Q： $\epsilon$ 怎么选？要监控什么？**
 
 A：📄 PPO 论文和 LLaMA 2 都用 0.2。💭 训练时通常监控**被裁剪的 token 比例**（clipfrac）和新旧策略之间的近似 KL；如果它们持续很大，说明每轮更新太激进（学习率太大或 epoch 太多）。
 
@@ -258,7 +258,7 @@ A：📄 PPO 论文和 LLaMA 2 都用 0.2。💭 训练时通常监控**被裁�
 
 **Q：对称的裁剪区间有什么问题？**
 
-A：📄 DAPO（ByteDance Seed 2025）提出 **Clip-Higher**：把上界放宽（如 $\epsilon_{high}=0.28$、$\epsilon_{low}=0.2$）。原因是低概率 token 的概率比更容易被上界卡住，导致"探索型"token 难以被提升，从而出现**熵坍塌**（→ 第 11 章）。
+A：📄 DAPO（ByteDance Seed 2025）提出 **Clip-Higher**：把上界放宽（如 $\epsilon_{high}=0.28$、 $\epsilon_{low}=0.2$）。原因是低概率 token 的概率比更容易被上界卡住，导致"探索型"token 难以被提升，从而出现**熵坍塌**（→ 第 11 章）。
 
 ---
 
@@ -266,7 +266,7 @@ A：📄 DAPO（ByteDance Seed 2025）提出 **Clip-Higher**：把上界放宽�
 
 ### 🎯 一句话标答
 
-> RLHF 的目标是 $\max_\pi \mathbb{E}_{x, y\sim\pi}[r(x,y)] - \beta\,\text{KL}(\pi(\cdot\mid x)\,\|\,\pi_{ref}(\cdot\mid x))$。🧮 它的最优解有闭式形式：$\pi^*(y\mid x) = \frac{1}{Z(x)}\pi_{ref}(y\mid x)\exp\big(r(x,y)/\beta\big)$。KL 项的作用是：让策略留在 RM 可信的区域、保持语言质量、减少遗忘。
+> RLHF 的目标是 $\max_\pi \mathbb{E}_{x, y\sim\pi}[r(x,y)] - \beta\thinspace \text{KL}(\pi(\cdot\mid x)\thinspace \Vert \thinspace \pi_{ref}(\cdot\mid x))$。🧮 它的最优解有闭式形式： $\pi^\ast (y\mid x) = \frac{1}{Z(x)}\pi_{ref}(y\mid x)\exp\big(r(x,y)/\beta\big)$。KL 项的作用是：让策略留在 RM 可信的区域、保持语言质量、减少遗忘。
 
 ### 🧮 推导
 
@@ -282,19 +282,19 @@ $$-\beta\sum_y\pi(y)\log\frac{\pi(y)}{\pi_{ref}(y)\,e^{r(y)/\beta}} = -\beta\,\t
 
 $$\boxed{\pi^*(y\mid x) = \frac{1}{Z(x)}\,\pi_{ref}(y\mid x)\,\exp\!\left(\frac{r(x,y)}{\beta}\right)}$$
 
-💡 这个结果说明：KL 约束下的 RLHF 等价于**用奖励对参考模型做指数加权**。$\beta\to0$ 时退化为只选奖励最高的回答；$\beta\to\infty$ 时 $\pi^*=\pi_{ref}$。DPO 正是从这个闭式解出发，把奖励用策略表示出来（第 10 章）。
+💡 这个结果说明：KL 约束下的 RLHF 等价于**用奖励对参考模型做指数加权**。 $\beta\to0$ 时退化为只选奖励最高的回答； $\beta\to\infty$ 时 $\pi^\ast =\pi_{ref}$。DPO 正是从这个闭式解出发，把奖励用策略表示出来（第 10 章）。
 
 ### 🔥 高频追问
 
-**Q：为什么是 $\text{KL}(\pi\,\|\,\pi_{ref})$ 而不是反过来？**
+**Q：为什么是 $\text{KL}(\pi\thinspace \Vert \thinspace \pi_{ref})$ 而不是反过来？**
 
-A：🧮 $\text{KL}(\pi\,\|\,\pi_{ref})$ 的期望是在 $\pi$ 的样本上计算的，可以直接用策略生成的样本估计；并且它在 $\pi$ 把概率放到 $\pi_{ref}$ 几乎为 0 的地方时惩罚很大，所以策略不会生成参考模型认为极不可能的文本。它是"寻找众数"（mode-seeking）的：允许策略只覆盖参考分布的一部分。
+A：🧮 $\text{KL}(\pi\thinspace \Vert \thinspace \pi_{ref})$ 的期望是在 $\pi$ 的样本上计算的，可以直接用策略生成的样本估计；并且它在 $\pi$ 把概率放到 $\pi_{ref}$ 几乎为 0 的地方时惩罚很大，所以策略不会生成参考模型认为极不可能的文本。它是"寻找众数"（mode-seeking）的：允许策略只覆盖参考分布的一部分。
 
 **Q：KL 放在奖励里还是放在损失里？**
 
 A：
 - **放在奖励里**（InstructGPT、Ziegler 2019）：每个 token 的奖励 $-\beta\log(\pi/\pi_{ref})$，通过价值函数和 GAE 传播，影响后续 token 的优势。
-- **放在损失里**（📄 GRPO, DeepSeekMath）：直接在损失中加 $\beta\,\mathbb{D}_{KL}$，并使用无偏、非负的 $k_3$ 估计量 $\frac{\pi_{ref}}{\pi} - \log\frac{\pi_{ref}}{\pi} - 1$（→ 第 11 章）。
+- **放在损失里**（📄 GRPO, DeepSeekMath）：直接在损失中加 $\beta\thinspace \mathbb{D}_{KL}$，并使用无偏、非负的 $k_3$ 估计量 $\frac{\pi_{ref}}{\pi} - \log\frac{\pi_{ref}}{\pi} - 1$（→ 第 11 章）。
 - 💭 两者在优化上不完全等价。📄 后续有研究分析了这些 KL 估计量的梯度性质，发现某些"放在损失里"的写法得到的梯度与真正的 KL 梯度并不一致。
 
 **Q：β 怎么设？**
@@ -319,7 +319,7 @@ A：
 
 ### 📄 过优化的 scaling law
 
-📄 设置：用一个大的"金标准 RM"代替人类，用它的标签训练较小的"代理 RM"，再对代理 RM 做 Best-of-N 或 RL 优化，观察金标准分数的变化。令 $d = \sqrt{\text{KL}(\pi\,\|\,\pi_{init})}$：
+📄 设置：用一个大的"金标准 RM"代替人类，用它的标签训练较小的"代理 RM"，再对代理 RM 做 Best-of-N 或 RL 优化，观察金标准分数的变化。令 $d = \sqrt{\text{KL}(\pi\thinspace \Vert \thinspace \pi_{init})}$：
 
 $$R_{BoN}(d) = d\,(\alpha_{bon} - \beta_{bon}\,d), \qquad R_{RL}(d) = d\,(\alpha_{RL} - \beta_{RL}\log d)$$
 
@@ -379,7 +379,7 @@ $$R_{BoN}(d) = d\,(\alpha_{bon} - \beta_{bon}\,d), \qquad R_{RL}(d) = d\,(\alpha
 
 ### 📄 公开的超参数（LLaMA 2-Chat 的 PPO）
 
-AdamW（$\beta_1=0.9, \beta_2=0.95, \epsilon=10^{-5}$）、weight decay 0.1、梯度裁剪 1.0、**常数学习率 $10^{-6}$**；每次迭代 batch 512、mini-batch 64、每个 mini-batch 一步更新；裁剪阈值 0.2；KL 系数 7B/13B 为 0.01、34B/70B 为 0.005；训练 200–400 次迭代。奖励由有用性和安全性两个 RM 分段组合，并做了白化处理。
+AdamW（ $\beta_1=0.9, \beta_2=0.95, \epsilon=10^{-5}$）、weight decay 0.1、梯度裁剪 1.0、**常数学习率 $10^{-6}$**；每次迭代 batch 512、mini-batch 64、每个 mini-batch 一步更新；裁剪阈值 0.2；KL 系数 7B/13B 为 0.01、34B/70B 为 0.005；训练 200–400 次迭代。奖励由有用性和安全性两个 RM 分段组合，并做了白化处理。
 
 > ❌ 旧版的显存表格（"约 13M"）、"典型 2000–5000 步"、"rollout batch 是 mini-batch 的 4–8 倍"等没有出处，已替换为上面有出处的配置。
 
@@ -418,7 +418,7 @@ AdamW（$\beta_1=0.9, \beta_2=0.95, \epsilon=10^{-5}$）、weight decay 0.1、�
 ### 📄 Best-of-N 与拒绝采样微调
 
 - **Best-of-N**：采样 $N$ 个回答，用 RM 选最高分。📄 WebGPT（Nakano et al. 2021）发现，在他们的设置中，对 RM 做 best-of-64 的拒绝采样效果**优于** RL。
-- 🧮 Best-of-N 策略与原策略之间的 KL 有一个常用的解析式：$\text{KL}_{BoN} = \log N - \frac{N-1}{N}$。📄 Beirami et al. 2024 指出这其实是一个**上界**。这个关系让我们可以在"同样的 KL 预算"下比较 Best-of-N 和 RL（Q6 的 Gao et al. 正是这样做的）。
+- 🧮 Best-of-N 策略与原策略之间的 KL 有一个常用的解析式： $\text{KL}_{BoN} = \log N - \frac{N-1}{N}$。📄 Beirami et al. 2024 指出这其实是一个**上界**。这个关系让我们可以在"同样的 KL 预算"下比较 Best-of-N 和 RL（Q6 的 Gao et al. 正是这样做的）。
 - **拒绝采样微调**：用 Best-of-N 选出的回答做 SFT。📄 LLaMA 2-Chat 在前几轮迭代中只用了拒绝采样微调，最后才加 PPO。
 
 ### 🔍 对比
@@ -484,7 +484,7 @@ AdamW（$\beta_1=0.9, \beta_2=0.95, \epsilon=10^{-5}$）、weight decay 0.1、�
 | 策略梯度 | $\nabla\log\pi\cdot\hat A$；基线减小方差 | 🧮 |
 | PPO-Clip | $\min(\rho A, \text{clip}(\rho)A)$；够了就停、错了能改 | 🧮 |
 | GAE | $\sum(\gamma\lambda)^l\delta_{t+l}$ | 🧮 |
-| 闭式解 | $\pi^* \propto \pi_{ref}e^{r/\beta}$ | 🧮 |
+| 闭式解 | $\pi^\ast \propto \pi_{ref}e^{r/\beta}$ | 🧮 |
 | KL 位置 | 奖励里（InstructGPT）/ 损失里（GRPO） | 📄 |
 | 过优化 | 金标准奖励随 KL 先升后降；函数形式可预测；RM 越大越好 | 📄 |
 | Hacking 模式 | 长度、谄媚、误导人类 | 📄 |
@@ -494,7 +494,7 @@ AdamW（$\beta_1=0.9, \beta_2=0.95, \epsilon=10^{-5}$）、weight decay 0.1、�
 ## ✅ 自测题
 
 1. 推导 Bradley–Terry 损失，并说明为什么 RM 分数加上只依赖 $x$ 的常数后损失不变。
-2. 从策略梯度推导到 PPO-Clip，并对 $A>0$、$A<0$ 分别分析裁剪何时生效。
+2. 从策略梯度推导到 PPO-Clip，并对 $A>0$、 $A\lt 0$ 分别分析裁剪何时生效。
 3. 推导 KL 正则 RLHF 目标的最优策略闭式解。
 4. 描述 Gao et al. 2023 的实验设置和主要结论。KL 惩罚在其中起什么作用？
 5. 列出三种 reward hacking 现象并给出对应的论文证据和缓解方法。

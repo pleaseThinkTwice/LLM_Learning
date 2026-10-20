@@ -121,7 +121,7 @@ A：形状完全不同，所以最优 kernel 不同。
 - **Prefill**：Q 是 $[n, d]$，算 $[n, n]$ 的 attention 矩阵 → 是个标准 GEMM，**FlashAttention** 通过 tiling 把 $[n,n]$ 矩阵留在 SRAM 里、不落 HBM，收益巨大。
 - **Decode**：Q 只有 $[1, d]$，算 $[1, t]$ → 本质是 **GEMV**，attention 矩阵只有一行，根本不存在"$[n,n]$ 矩阵太大"的问题。FlashAttention 那套 tiling 意义不大。
 
-Decode 的真瓶颈是**读 KV Cache**（$t$ 越长读得越多）。所以有专门的 **FlashDecoding / FlashDecoding++**：把 KV 序列维度**切成多段并行**，再 reduce 合并——因为 batch=1 时 GPU 的 SM 大量闲置，切 KV 维度才能把并行度提上来。
+Decode 的真瓶颈是**读 KV Cache**（ $t$ 越长读得越多）。所以有专门的 **FlashDecoding / FlashDecoding++**：把 KV 序列维度**切成多段并行**，再 reduce 合并——因为 batch=1 时 GPU 的 SM 大量闲置，切 KV 维度才能把并行度提上来。
 
 vLLM 的 `paged_attention` kernel、FlashInfer 都是为 Decode 专门写的。**面试时能说清"Prefill 用 FlashAttention、Decode 用 FlashDecoding，因为一个是 GEMM 一个是 GEMV"，是很强的信号**。
 
@@ -168,13 +168,13 @@ vLLM 的 `paged_attention` kernel、FlashInfer 都是为 Decode 专门写的。*
 
 #### 为什么 K、V 可以缓存，Q 不行？
 
-关键在 causal mask。第 $i$ 个位置的 K、V 只依赖 $x_i$ 本身（$K_i = x_i W^K$），**不依赖任何后来的 token**——所以一旦算出，永远不变，可以缓存。
+关键在 causal mask。第 $i$ 个位置的 K、V 只依赖 $x_i$ 本身（ $K_i = x_i W^K$），**不依赖任何后来的 token**——所以一旦算出，永远不变，可以缓存。
 
 而 Q 呢？第 $t$ 步只需要 $Q_t$ 这一个新的 query，历史的 $Q_1 ... Q_{t-1}$ **再也用不到了**——它们的输出早就算完输出了。所以 **Q 不需要缓存，缓存了也没用**。
 
 $$\text{Attn}(Q_t, K_{1:t}, V_{1:t}) = \text{softmax}\left(\frac{Q_t K_{1:t}^\top}{\sqrt{d_h}}\right) V_{1:t}$$
 
-看这个式子：$Q$ 下标只有 $t$，$K, V$ 下标是 $1{:}t$ ——**谁需要历史，谁就要缓存**。
+看这个式子： $Q$ 下标只有 $t$， $K, V$ 下标是 $1{:}t$ ——**谁需要历史，谁就要缓存**。
 
 #### 显存公式（必须能默写）
 
@@ -205,7 +205,7 @@ $$\text{KVCache}_{\text{bytes}} = 2 \times B \times S \times L \times n_{kv} \ti
 >
 > 🚨 **注意第 3 行的反直觉结论**：**70B 的 KV Cache 比 7B 还小**（320 KB vs 512 KB）！因为 70B 用了 GQA-8。这是个绝佳的面试素材——它说明 **KV Cache 大小和模型参数量没有直接关系，只和"KV 头数 × 层数"有关**。
 >
-> MLA 那一行的 576 见第 2 章的推导（$d_c=512$ 压缩向量 + $d_h^R=64$ 解耦 RoPE 部分）。**MLA 相对同规模的 MHA（128 个头、head_dim 128）大约是两个数量级的差距**。💭 小 KV Cache 被普遍认为是 DeepSeek 推理成本低的原因之一。
+> MLA 那一行的 576 见第 2 章的推导（ $d_c=512$ 压缩向量 + $d_h^R=64$ 解耦 RoPE 部分）。**MLA 相对同规模的 MHA（128 个头、head_dim 128）大约是两个数量级的差距**。💭 小 KV Cache 被普遍认为是 DeepSeek 推理成本低的原因之一。
 
 #### 显存全景：KV Cache 到底占多少？
 
@@ -295,7 +295,7 @@ A：对标准 decoder 来说，**KV Cache 几乎不会比重算更慢**，但它
 
 真正值得分析的是：**读 KV Cache 什么时候超过读权重**（batch=1，7B 模型）：
 - 读权重：14 GB（固定）
-- 读 KV Cache：$S \times 512\text{KB}$
+- 读 KV Cache： $S \times 512\text{KB}$
 
 🧮 当 $S = 14\text{ GB} / 512\text{ KB} \approx 28{,}000$ 时，读 KV Cache 的量就等于读权重了。再长下去，**KV Cache 成为 Decode 的主要瓶颈**，而不是权重。
 
