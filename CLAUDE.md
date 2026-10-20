@@ -34,8 +34,9 @@
 - 2026-10-20 已在可访问 arXiv 的环境下对照原文核实：DistServe（v1 4.48×/10.2×，v3 7.4×/12.6×）、GSM1k（v4 最高掉 8%，v1 为 13%）、MT-Bench Table 2/3/5、EAGLE-2/3、MagicDec、RULER、Anthropic 多 Agent 与 Contextual Retrieval 博客、MCP Tools 规范、DeepSeek-V2 的 latent RMSNorm（§3.1.2）、Kimi K2 的 QK-Norm 表述、R1 的 Nature 卷页。
 - 环境说明：本仓库的云环境已放开 arxiv.org / export.arxiv.org / openreview.net。export API 有速率限制，批量请求会返回 "Rate exceeded"，可改为逐个抓 `arxiv.org/abs/<id>` 页面（间隔几秒），全文用 `arxiv.org/pdf/<id>` + `pdftotext`。
 - 2026-10-20 进展：
-  - 第 14 章只做了定点修正（旧版 ★ 很少）；第 15–20 章已按第 3 章范本重写（篇幅约减半，核对数字，补 📚 出处）。第 20 章的容量估算改为按"总 token × 2N"计算（旧版漏了 prefill）。
+  - 第 12–20 章已全部按第 3 章范本重写（篇幅约减半，核对数字，补 📚 出处）。第 20 章的容量估算改为按"总 token × 2N"计算（旧版漏了 prefill）。
   - 新增第 21 章 MoE、第 22 章多模态、第 23 章可解释性。三章的关键数字已对照 arXiv 摘要或全文核实；Anthropic 可解释性工作（Towards/Scaling Monosemanticity、Circuit Tracing、Biology）引用的是 transformer-circuits.pub 页面。
   - `00-全书知识地图.md` 已重写，覆盖第 1–25 章（11 条主线、依赖矩阵、锚点、反直觉结论、面试索引）。改动任一章的题号或结论时，同步检查这里。
 - 第 24 章长上下文训练、第 25 章知识蒸馏与小模型已完成并纳入知识地图（2026-10-20）。最初审阅列出的缺失主题已全部补齐；新主题从第 26 章起追加。
+- 2026-10-20 全书 arXiv 引用自动核对：抽取正文中全部 574 个 arXiv 号，逐个抓取 arxiv.org 的标题，与正文引用的标题比对，未发现编号指向错误论文的情况（只修正了一处 arXiv 上已改名的标题）。以后新增引用可复用同样的方法：对每个 ID 抓 `arxiv.org/abs/<id>` 的 `citation_title`。
 - 仍未经原文逐条核对的：第 1–11 章的部分引用（只经过检索摘要核实）；第 22–25 章中个别会议归属（如 Transfusion、Janus、Emu3、STRING、LongWriter、Minitron 的正式发表 venue）未写，后续可补。
