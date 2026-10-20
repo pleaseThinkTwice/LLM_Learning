@@ -1445,7 +1445,8 @@ A：**这是生产上最常见的 Agent 事故——四层防御。**
 **为什么会这样**（这个分析很重要）：
 1. **模型没"看懂"错误信息** —— 错误写得太技术化
 2. **模型没有"别的选择"** —— 它不知道 user_id 该从哪来（**又是"没给出路"**！Q3）
-3. **温度太低** —— temperature=0 时，**同样的输入必然产生同样的输出** ⚠️
+3. **温度太低** —— temperature=0 时，**同样的输入（几乎）必然产生同样的输出** ⚠️
+   （📄 严格说 temperature=0 在推理引擎里**不保证逐位确定**：动态 batch 改变了 kernel 的归约顺序，浮点误差可能翻转 argmax。Thinking Machines Lab 2025 年的博客 *Defeating Nondeterminism in LLM Inference* 把主要原因归结为 kernel 缺乏 batch 不变性，并给出了 batch-invariant kernel 的实现。但这种随机性不可控、幅度很小，**不能指望靠它让重试产生不同结果**。）
 
 > 🚨 **第 3 点最反直觉，也最容易被忽略**：
 > **Function Calling 场景大家都用 temperature=0（第 14 章 Q1），但这意味着"重试"是<u>无意义</u>的** —— **同样的 prompt 必然生成同样的 tool call**！
