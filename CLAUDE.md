@@ -30,7 +30,7 @@
 
 ## 已知待办
 
-- 第 1–20 章已全部去掉"频率"打分列和"大厂偏好"小节（2026-10-19）。第 1–11 章是整章重写；第 12–20 章原本质量较好，只做了定点修正（核对数字、加标注、补"研究前沿"小节），其中仍可能有未标注的经验数字，后续阅读时发现就补 💭 或出处。
+- 第 1–20 章已全部去掉"频率"打分列和"大厂偏好"小节（2026-10-19）。截至 2026-10-20，第 1–20 章都已按第 3 章范本整章重写，第 21–25 章按同一标准新写。阅读中若发现仍未标注的经验数字，补 💭 或出处。
 - 2026-10-20 已在可访问 arXiv 的环境下对照原文核实：DistServe（v1 4.48×/10.2×，v3 7.4×/12.6×）、GSM1k（v4 最高掉 8%，v1 为 13%）、MT-Bench Table 2/3/5、EAGLE-2/3、MagicDec、RULER、Anthropic 多 Agent 与 Contextual Retrieval 博客、MCP Tools 规范、DeepSeek-V2 的 latent RMSNorm（§3.1.2）、Kimi K2 的 QK-Norm 表述、R1 的 Nature 卷页。
 - 环境说明：本仓库的云环境已放开 arxiv.org / export.arxiv.org / openreview.net。export API 有速率限制，批量请求会返回 "Rate exceeded"，可改为逐个抓 `arxiv.org/abs/<id>` 页面（间隔几秒），全文用 `arxiv.org/pdf/<id>` + `pdftotext`。
 - 2026-10-20 进展：
