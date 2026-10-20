@@ -236,7 +236,7 @@ $$A_{ij} = \frac{\exp(S_{ij})}{\sum_{k} \exp(S_{ik})}$$
 
 **Step 4**：加权聚合
 
-$$\text{Output}_i = \sum_j A_{ij} V_j, \qquad \text{Output} = AV \in \mathbb{R}^{n \times d_v}$$
+$$\text{Output}_ i = \sum_j A_{ij} V_j, \qquad \text{Output} = AV \in \mathbb{R}^{n \times d_v}$$
 
 🧮 **一个有用的改写**： $S = X W^Q (W^K)^T X^T / \sqrt{d_k}$。中间的 $W^Q (W^K)^T \in \mathbb{R}^{d_{model} \times d_{model}}$ 是一个**秩不超过 $d_k$ 的双线性形式**。这说明：
 - Q、K 分开参数化，等价于学习一个低秩的、**非对称**的相似度矩阵；
@@ -434,7 +434,7 @@ A：生成第 $t$ 个 token 时，新 token 的 query 只需和 $t$ 个缓存的
 
 ### 📐 公式
 
-$$\text{MultiHead}(X) = \text{Concat}(\text{head}_1, \ldots, \text{head}_h)W^O, \qquad \text{head}_i = \text{Attention}(XW_i^Q, XW_i^K, XW_i^V)$$
+$$\text{MultiHead}(X) = \text{Concat}(\text{head}_ 1, \ldots, \text{head}_ h)W^O, \qquad \text{head}_ i = \text{Attention}(XW_i^Q, XW_i^K, XW_i^V)$$
 
 $W_i^Q, W_i^K, W_i^V \in \mathbb{R}^{d_{model}\times d_k}$， $d_k = d_{model}/h$， $W^O \in \mathbb{R}^{d_{model}\times d_{model}}$。
 
@@ -523,13 +523,13 @@ $$c_t^{KV} = W^{DKV} h_t \in \mathbb{R}^{d_c}, \qquad k_t^{C} = W^{UK} c_t^{KV},
 
 **权重吸收**：对第 $i$ 个头，
 
-$$q_{t,i}^T k_{s,i}^{C} = (W_i^{Q} h_t)^T (W_i^{UK} c_s^{KV}) = h_t^T \underbrace{(W_i^{Q})^T W_i^{UK}}_{\text{可预先合并}} c_s^{KV}$$
+$$q_{t,i}^T k_{s,i}^{C} = (W_i^{Q} h_t)^T (W_i^{UK} c_s^{KV}) = h_t^T \underbrace{(W_i^{Q})^T W_i^{UK}}_ {\text{可预先合并}} c_s^{KV}$$
 
 所以 query 可以直接投影到 $d_c$ 维的潜在空间，与缓存的 $c_s^{KV}$ 做点积，**不需要还原出完整的 K**。同理， $W^{UV}$ 可以吸收进输出投影 $W^O$。
 
 **RoPE 带来的问题**：RoPE 在 $q$ 和 $k$ 上分别乘以和位置有关的旋转矩阵 $R_t, R_s$：
 
-$$q_t^T R_t^T R_s k_s = h_t^T (W^Q)^T R_{s-t}\, W^{UK} c_s$$
+$$q_t^T R_t^T R_s k_s = h_t^T (W^Q)^T R_{s-t}\thinspace  W^{UK} c_s$$
 
 $R_{s-t}$ 夹在 $W^Q$ 和 $W^{UK}$ 中间，并且随相对位置变化，所以两个矩阵**无法预先合并**。
 

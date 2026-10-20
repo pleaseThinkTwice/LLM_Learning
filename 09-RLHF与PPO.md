@@ -78,7 +78,7 @@ $$P(y_w\succ y_l\mid x) = \frac{e^{r(x,y_w)}}{e^{r(x,y_w)} + e^{r(x,y_l)}} = \si
 
 最大似然：
 
-$$\mathcal{L}_{RM}(\phi) = -\mathbb{E}_{(x,y_w,y_l)\sim\mathcal{D}}\left[\log\sigma\big(r_\phi(x,y_w) - r_\phi(x,y_l)\big)\right]$$
+$$\mathcal{L}_ {RM}(\phi) = -\mathbb{E}_ {(x,y_w,y_l)\sim\mathcal{D}}\left[\log\sigma\big(r_\phi(x,y_w) - r_\phi(x,y_l)\big)\right]$$
 
 🧮 **两个重要性质**：
 1. 分数只有**差值**有意义：对所有回答加一个只依赖 $x$ 的常数 $c(x)$，损失不变。因此 RM 的绝对值没有意义，用作 PPO 奖励时通常需要归一化。
@@ -144,7 +144,7 @@ A：
 
 目标 $J(\theta) = \mathbb{E}_ {\tau\sim\pi_\theta}\left[\sum_t r_t\right]$。🧮 由 $\nabla_\theta\pi_\theta = \pi_\theta\nabla_\theta\log\pi_\theta$（log-derivative trick）：
 
-$$\nabla_\theta J = \mathbb{E}_{\tau\sim\pi_\theta}\left[\sum_t\nabla_\theta\log\pi_\theta(a_t\mid s_t)\,\hat A_t\right]$$
+$$\nabla_\theta J = \mathbb{E}_ {\tau\sim\pi_\theta}\left[\sum_t\nabla_\theta\log\pi_\theta(a_t\mid s_t)\thinspace \hat A_t\right]$$
 
 用优势 $A_t = Q(s_t,a_t) - V(s_t)$ 代替回报，是为了在不改变期望的前提下**减小方差**（减去任何只依赖状态的基线都不引入偏差）。
 
@@ -163,7 +163,7 @@ $$\rho_t(\theta) = \frac{\pi_\theta(a_t\mid s_t)}{\pi_{old}(a_t\mid s_t)}$$
 
 📄 PPO（Schulman et al. 2017）：
 
-$$L^{CLIP}(\theta) = \mathbb{E}_t\left[\min\Big(\rho_t\hat A_t,\ \text{clip}(\rho_t, 1-\epsilon, 1+\epsilon)\,\hat A_t\Big)\right]$$
+$$L^{CLIP}(\theta) = \mathbb{E}_ t\left[\min\Big(\rho_t\hat A_t,\ \text{clip}(\rho_t, 1-\epsilon, 1+\epsilon)\thinspace \hat A_t\Big)\right]$$
 
 通常 $\epsilon=0.2$。直觉见 Q4。
 
@@ -272,15 +272,15 @@ A：📄 DAPO（ByteDance Seed 2025）提出 **Clip-Higher**：把上界放宽�
 
 对固定的 $x$，目标为
 
-$$\max_\pi\ \sum_y\pi(y)\,r(y) - \beta\sum_y\pi(y)\log\frac{\pi(y)}{\pi_{ref}(y)}$$
+$$\max_\pi\ \sum_y\pi(y)\thinspace r(y) - \beta\sum_y\pi(y)\log\frac{\pi(y)}{\pi_{ref}(y)}$$
 
 改写为
 
-$$-\beta\sum_y\pi(y)\log\frac{\pi(y)}{\pi_{ref}(y)\,e^{r(y)/\beta}} = -\beta\,\text{KL}\!\left(\pi\ \Big\|\ \frac{\pi_{ref}e^{r/\beta}}{Z}\right) + \beta\log Z$$
+$$-\beta\sum_y\pi(y)\log\frac{\pi(y)}{\pi_{ref}(y)\thinspace e^{r(y)/\beta}} = -\beta\thinspace \text{KL}\negthinspace \left(\pi\ \Big\Vert \ \frac{\pi_{ref}e^{r/\beta}}{Z}\right) + \beta\log Z$$
 
 其中 $Z = \sum_y\pi_{ref}(y)e^{r(y)/\beta}$ 与 $\pi$ 无关。KL 非负，等于 0 当且仅当两个分布相同，所以
 
-$$\boxed{\pi^*(y\mid x) = \frac{1}{Z(x)}\,\pi_{ref}(y\mid x)\,\exp\!\left(\frac{r(x,y)}{\beta}\right)}$$
+$$\boxed{\pi^\ast (y\mid x) = \frac{1}{Z(x)}\thinspace \pi_{ref}(y\mid x)\thinspace \exp\negthinspace \left(\frac{r(x,y)}{\beta}\right)}$$
 
 💡 这个结果说明：KL 约束下的 RLHF 等价于**用奖励对参考模型做指数加权**。 $\beta\to0$ 时退化为只选奖励最高的回答； $\beta\to\infty$ 时 $\pi^\ast =\pi_{ref}$。DPO 正是从这个闭式解出发，把奖励用策略表示出来（第 10 章）。
 
@@ -321,7 +321,7 @@ A：
 
 📄 设置：用一个大的"金标准 RM"代替人类，用它的标签训练较小的"代理 RM"，再对代理 RM 做 Best-of-N 或 RL 优化，观察金标准分数的变化。令 $d = \sqrt{\text{KL}(\pi\thinspace \Vert \thinspace \pi_{init})}$：
 
-$$R_{BoN}(d) = d\,(\alpha_{bon} - \beta_{bon}\,d), \qquad R_{RL}(d) = d\,(\alpha_{RL} - \beta_{RL}\log d)$$
+$$R_{BoN}(d) = d\thinspace (\alpha_{bon} - \beta_{bon}\thinspace d), \qquad R_{RL}(d) = d\thinspace (\alpha_{RL} - \beta_{RL}\log d)$$
 
 - 两种优化方式的函数形式不同，但金标准奖励都会在某个 KL 之后**下降**。
 - 系数随**代理 RM 的参数量**平滑变化：RM 越大，过优化越晚出现、峰值越高。

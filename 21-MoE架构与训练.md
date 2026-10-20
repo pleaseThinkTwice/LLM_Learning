@@ -51,7 +51,7 @@
 
 一层 MoE（以 $\text{top-}k$ 为例）：
 
-$$y = \sum_{i \in \mathcal{T}_k(x)} g_i(x)\, E_i(x), \qquad \mathcal{T}_k(x) = \text{TopK}\big(\{s_i(x)\}_{i=1}^N, k\big)$$
+$$y = \sum_{i \in \mathcal{T}_ k(x)} g_i(x)\thinspace  E_i(x), \qquad \mathcal{T}_ k(x) = \text{TopK}\big(\lbrace s_i(x)\rbrace _ {i=1}^N, k\big)$$
 
 - $E_i$：第 $i$ 个专家，通常就是一个 SwiGLU FFN（第 3 章）。
 - $s_i(x)$：路由打分，最常见是 $s = \text{softmax}(W_r x)$（ $W_r \in \mathbb{R}^{N \times d}$）。📄 DeepSeek-V3 改用 $s_i = \sigma(u^\top e_i)$（sigmoid），再在选中的专家上归一化。
@@ -98,7 +98,7 @@ $$y = \sum_{i \in \mathcal{T}_k(x)} g_i(x)\, E_i(x), \qquad \mathcal{T}_k(x) = \
 
 🧮 输出 $y = \sum_{i \in \mathcal{T}_ k} g_i E_i(x)$ 对路由参数的梯度只经过 $g_i$：
 
-$$\frac{\partial \mathcal{L}}{\partial W_r} = \sum_{i \in \mathcal{T}_k} \frac{\partial \mathcal{L}}{\partial y}^{\!\top} E_i(x)\; \frac{\partial g_i}{\partial W_r}$$
+$$\frac{\partial \mathcal{L}}{\partial W_r} = \sum_{i \in \mathcal{T}_ k} \frac{\partial \mathcal{L}}{\partial y}^{\negthinspace \top} E_i(x)\thickspace  \frac{\partial g_i}{\partial W_r}$$
 
 几个推论：
 1. **没被选中的专家拿不到梯度**，路由器也不知道"选它会怎样"。这就是 MoE 容易**路由坍缩**（少数专家越训越强、越来越常被选）的根源，需要 Q3 的负载均衡来对抗。
@@ -143,7 +143,7 @@ A：📄 DeepSeek-V3 从 V2 的 softmax 改为 sigmoid，并在选中专家上�
 
 📄 Fedus et al. 2021：对 $N$ 个专家、含 $T$ 个 token 的 batch $\mathcal{B}$，
 
-$$\mathcal{L}_{\text{bal}} = \alpha \cdot N \cdot \sum_{i=1}^{N} f_i \cdot P_i, \qquad f_i = \frac{1}{T}\sum_{x\in\mathcal{B}} \mathbb{1}\{\arg\max p(x) = i\}, \qquad P_i = \frac{1}{T}\sum_{x\in\mathcal{B}} p_i(x)$$
+$$\mathcal{L}_ {\text{bal}} = \alpha \cdot N \cdot \sum_{i=1}^{N} f_i \cdot P_i, \qquad f_i = \frac{1}{T}\sum_{x\in\mathcal{B}} \mathbb{1}\lbrace \arg\max p(x) = i\rbrace , \qquad P_i = \frac{1}{T}\sum_{x\in\mathcal{B}} p_i(x)$$
 
 - $f_i$：实际分到专家 $i$ 的 token 比例（**不可导**）； $P_i$：路由器给专家 $i$ 的平均概率（**可导**）。梯度只通过 $P_i$。
 - 乘以 $N$ 是为了让损失在均匀分布时恒为 $\alpha$（ $\sum_i \frac1N\cdot\frac1N = \frac1N$），与专家数无关。
@@ -155,7 +155,7 @@ $$\mathcal{L}_{\text{bal}} = \alpha \cdot N \cdot \sum_{i=1}^{N} f_i \cdot P_i, 
 
 📄 ST-MoE（Zoph et al. 2022）：
 
-$$\mathcal{L}_z = \frac{1}{B}\sum_{j=1}^{B}\Big(\log \sum_{i=1}^{N} e^{x_i^{(j)}}\Big)^2$$
+$$\mathcal{L}_ z = \frac{1}{B}\sum_{j=1}^{B}\Big(\log \sum_{i=1}^{N} e^{x_i^{(j)}}\Big)^2$$
 
 其中 $x^{(j)}$ 是第 $j$ 个 token 的路由 logits。它惩罚路由 logit 的整体尺度，避免 softmax 进入数值不稳定的区间（与第 5 章输出层的 z-loss 同源）。📄 论文选 $c_z = 0.001$，结论是 **router z-loss 能稳定训练且不损失质量**（他们测试的其他稳定化手段大多以质量为代价）。
 
@@ -163,7 +163,7 @@ $$\mathcal{L}_z = \frac{1}{B}\sum_{j=1}^{B}\Big(\log \sum_{i=1}^{N} e^{x_i^{(j)}
 
 📄 Wang et al. 2024（DeepSeek），并在 DeepSeek-V3 中采用：
 
-$$g'_{i,t} = \begin{cases} s_{i,t}, & s_{i,t} + b_i \in \text{TopK}\big(\{s_{j,t}+b_j\}, K_r\big) \\ 0, & \text{otherwise}\end{cases}$$
+$$g'_ {i,t} = \begin{cases} s_{i,t}, & s_{i,t} + b_i \in \text{TopK}\big(\lbrace s_{j,t}+b_j\rbrace , K_r\big) \cr  0, & \text{otherwise}\end{cases}$$
 
 - 偏置 $b_i$ **只影响"选谁"，不影响加权**（加权仍用原始 $s_{i,t}$），所以不产生任何梯度干扰。
 - 每步结束后，**过载的专家 $b_i \mathrel{-}= \gamma$，欠载的 $b_i \mathrel{+}= \gamma$**。📄 DeepSeek-V3 在前 14.3T token 用 $\gamma = 0.001$，最后 500B token 设为 0。

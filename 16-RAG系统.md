@@ -284,7 +284,7 @@ A：💭 按数据量和已有技术栈：数据量不大且已用 Postgres，�
 
 ### 📐 RRF 与 $k$ 的作用
 
-$$\text{RRF}(d) = \sum_{r \in \text{rankers}} \frac{1}{k + \text{rank}_r(d)}$$
+$$\text{RRF}(d) = \sum_{r \in \text{rankers}} \frac{1}{k + \text{rank}_ r(d)}$$
 
 - 🧮 $k=60$ 时第 1 名与第 2 名的得分是 $1/61$ 与 $1/62$，只差约 1.6%； $k=0$ 时是 1 与 0.5。
 - $k$ 越大，各名次差距越小，越看重"**被多个检索器同时召回**"； $k$ 越小，越看重某个检索器的头部。

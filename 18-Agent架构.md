@@ -107,7 +107,7 @@ A：① **编造 Observation**：模型在没有真正调用工具的情况下�
 
 设固定部分（system + tools + query）长 $L$，每次观测长 $o$，第 $k$ 轮的 prompt 长约 $L + (k-1)o$：
 
-$$\text{Total} = \sum_{k=1}^{N}\big(L + (k-1)o\big) = NL + o\,\frac{N(N-1)}{2} = O(N^2)$$
+$$\text{Total} = \sum_{k=1}^{N}\big(L + (k-1)o\big) = NL + o\thinspace \frac{N(N-1)}{2} = O(N^2)$$
 
 | 轮数（ $L=5000$、 $o=2000$） | ReAct 总输入 token |
 |---|---|
@@ -241,7 +241,7 @@ A：
 
 ### 📐 Generative Agents 的检索
 
-$$\text{Score}(m) = \alpha_{\text{rec}}\,\hat r(m) + \alpha_{\text{imp}}\,\hat\imath(m) + \alpha_{\text{rel}}\,\hat s(m)$$
+$$\text{Score}(m) = \alpha_{\text{rec}}\thinspace \hat r(m) + \alpha_{\text{imp}}\thinspace \hat\imath(m) + \alpha_{\text{rel}}\thinspace \hat s(m)$$
 
 📄 论文设定：Recency 按"距上次被访问的游戏小时数"做指数衰减，衰减因子 0.995；Importance 在**写入时**由 LLM 打 1–10 分；Relevance 是 query 与记忆的 embedding 余弦相似度；三项各自 min-max 归一化到 [0, 1]，三个 $\alpha$ 都取 1。
 

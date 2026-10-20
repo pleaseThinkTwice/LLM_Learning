@@ -98,7 +98,7 @@ $$h = W_0x + \frac{\alpha}{r}BAx$$
 
 **梯度**：令 $g = \partial\mathcal{L}/\partial h$（对单个样本），则
 
-$$\frac{\partial\mathcal{L}}{\partial B} = \frac{\alpha}{r}\,g\,(Ax)^T,\qquad \frac{\partial\mathcal{L}}{\partial A} = \frac{\alpha}{r}\,B^Tg\,x^T$$
+$$\frac{\partial\mathcal{L}}{\partial B} = \frac{\alpha}{r}\thinspace g\thinspace (Ax)^T,\qquad \frac{\partial\mathcal{L}}{\partial A} = \frac{\alpha}{r}\thinspace B^Tg\thinspace x^T$$
 
 🧮 由于 $B=0$，第一步时 $\partial\mathcal{L}/\partial A = 0$，只有 $B$ 会被更新；之后两者才一起变化。
 

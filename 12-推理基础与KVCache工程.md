@@ -178,7 +178,7 @@ $$\text{Attn}(Q_t, K_{1:t}, V_{1:t}) = \text{softmax}\left(\frac{Q_t K_{1:t}^\to
 
 #### 显存公式（必须能默写）
 
-$$\text{KVCache}_{\text{bytes}} = 2 \times B \times S \times L \times n_{kv} \times d_h \times \text{sizeof(dtype)}$$
+$$\text{KVCache}_ {\text{bytes}} = 2 \times B \times S \times L \times n_{kv} \times d_h \times \text{sizeof(dtype)}$$
 
 | 符号 | 含义 |
 |---|---|
@@ -419,7 +419,7 @@ $$\text{Intensity} = \frac{2PB}{2P} = B \ \text{FLOP/byte}$$
 
 #### 上界公式（记住它）
 
-$$\text{TPOT}_{\min} = \frac{\text{Model Size (bytes)}}{\text{HBM Bandwidth}}$$
+$$\text{TPOT}_ {\min} = \frac{\text{Model Size (bytes)}}{\text{HBM Bandwidth}}$$
 
 ```
 7B fp16 (14 GB) on A100 (2000 GB/s):  7.0 ms/token → 143 tok/s
